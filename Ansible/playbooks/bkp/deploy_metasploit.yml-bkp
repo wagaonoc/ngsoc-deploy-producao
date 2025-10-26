@@ -1,0 +1,241 @@
+---
+- name: Deploy Metasploit + Postgres (Ansible)
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+
+  vars:
+    msf_base_dir: "/opt/ngsoc-deploy/data/metasploit"
+    msf_pg_data: "{{ msf_base_dir }}/pg_data"
+    msf_data: "{{ msf_base_dir }}/msf_data"
+    msf_log_dir: "/opt/ngsoc-deploy/logs/metasploit"
+    msf_docs_dir: "/opt/ngsoc-deploy/docs/metasploit"
+
+    msf_db_user: "msfuser"
+    msf_db_name: "msfdb"
+    # msf_db_password: expected from wrapper (--extra-vars) or prompted if running manually
+
+    msf_db_service_name: "msf-db"
+    msf_app_service_name: "metasploit"
+    metasploit_image: "metasploitframework/metasploit-framework:latest"
+    postgres_image: "postgres:15-alpine"
+    docker_network_name: "ngsoc_net"
+
+    msf_systemd_unit: /etc/systemd/system/msf-containers.service
+
+  vars_prompt:
+    - name: "msf_db_password"
+      prompt: "Senha do DB Metasploit (ou passe via --extra-vars)"
+      private: yes
+      # triggers only if wrapper didn't pass --extra-vars
+
+  pre_tasks:
+    - name: Ensure community.docker collection is installed (info)
+      debug:
+        msg: "If needed: ansible-galaxy collection install community.docker"
+
+  tasks:
+    - name: Create directories with secure perms
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        mode: "{{ item.mode }}"
+        owner: root
+        group: root
+      loop:
+        - { path: "{{ msf_pg_data }}", mode: "0700" }
+        - { path: "{{ msf_data }}", mode: "0700" }
+        - { path: "{{ msf_log_dir }}", mode: "0750" }
+        - { path: "{{ msf_docs_dir }}", mode: "0750" }
+
+    - name: Ensure docker network exists
+      community.docker.docker_network:
+        name: "{{ docker_network_name }}"
+        state: present
+
+    - name: Remove old msf-db container if present (safe absent)
+      community.docker.docker_container:
+        name: "{{ msf_db_service_name }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Remove old metasploit container if present (safe absent)
+      community.docker.docker_container:
+        name: "{{ msf_app_service_name }}"
+        state: absent
+      ignore_errors: yes
+
+    - name: Pull Postgres image (ensure local copy)
+      community.docker.docker_image:
+        name: "{{ postgres_image }}"
+        source: pull
+
+    - name: Run Postgres container
+      community.docker.docker_container:
+        name: "{{ msf_db_service_name }}"
+        image: "{{ postgres_image }}"
+        env:
+          POSTGRES_USER: "{{ msf_db_user }}"
+          POSTGRES_PASSWORD: "{{ msf_db_password }}"
+          POSTGRES_DB: "{{ msf_db_name }}"
+        networks:
+          - name: "{{ docker_network_name }}"
+        volumes:
+          - "{{ msf_pg_data }}:/var/lib/postgresql/data"
+        state: started
+        restart_policy: always
+        recreate: yes
+
+    - name: Wait for postgres via docker exec loop
+      ansible.builtin.shell: |
+        for i in $(seq 1 20); do
+          docker exec {{ msf_db_service_name }} pg_isready -U {{ msf_db_user }} >/dev/null 2>&1 && exit 0
+          sleep 3
+        done
+        exit 1
+      register: pg_ready_check
+      failed_when: pg_ready_check.rc != 0
+
+    - name: Create database.yml for Metasploit (persistente)
+      copy:
+        dest: "{{ msf_data }}/database.yml"
+        content: |
+          production:
+            adapter: postgresql
+            database: {{ msf_db_name }}
+            username: {{ msf_db_user }}
+            password: "{{ msf_db_password }}"
+            host: {{ msf_db_service_name }}
+            port: 5432
+            pool: 75
+        mode: '0600'
+        owner: root
+        group: root
+
+    - name: Pull Metasploit image (ensure local copy)
+      community.docker.docker_image:
+        name: "{{ metasploit_image }}"
+        source: pull
+
+    - name: Run Metasploit container
+      community.docker.docker_container:
+        name: "{{ msf_app_service_name }}"
+        image: "{{ metasploit_image }}"
+        networks:
+          - name: "{{ docker_network_name }}"
+        volumes:
+          - "{{ msf_data }}:/root/.msf4"
+          - "{{ msf_log_dir }}:/root/.msf4/logs"
+        state: started
+        restart_policy: always
+        recreate: yes
+        command: /bin/sh -c "tail -f /dev/null"
+
+    - name: Check database.yml exists inside metasploit container
+      ansible.builtin.shell: docker exec {{ msf_app_service_name }} sh -c "test -f /root/.msf4/database.yml"
+      register: db_cfg_exists
+      failed_when: db_cfg_exists.rc != 0
+
+    - name: Create systemd unit to start containers at boot (uses shell wrapper for ExecStart/Stop)
+      copy:
+        dest: "{{ msf_systemd_unit }}"
+        content: |
+          [Unit]
+          Description=Start MSF containers (msf-db + metasploit)
+          After=docker.service
+          Requires=docker.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/sh -c "/usr/bin/docker start {{ msf_db_service_name }} {{ msf_app_service_name }} || true"
+          ExecStop=/bin/sh -c "/usr/bin/docker stop {{ msf_app_service_name }} {{ msf_db_service_name }} || true"
+          TimeoutStartSec=0
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start msf-containers.service
+      systemd:
+        name: "{{ msf_systemd_unit | basename }}"
+        enabled: yes
+        state: started
+
+    - name: Write credentials file inside docs folder (only readable by root)
+      copy:
+        dest: "{{ msf_docs_dir }}/credentials.txt"
+        content: |
+          #####################################################
+          # Metasploit credentials generated by deploy_metasploit.yml
+          # Path: {{ msf_docs_dir }}/credentials.txt
+          #####################################################
+          Container (DB)    : {{ msf_db_service_name }}
+          Container (MSF)   : {{ msf_app_service_name }}
+          Postgres image    : {{ postgres_image }}
+          Metasploit image  : {{ metasploit_image }}
+
+          Data dir (postgres): {{ msf_pg_data }}
+          MSF data (.msf4)   : {{ msf_data }}
+          Logs dir           : {{ msf_log_dir }}
+
+          DB user: {{ msf_db_user }}
+          DB name: {{ msf_db_name }}
+          DB password: {{ msf_db_password }}
+
+          Generated: {{ lookup('pipe','date --iso-8601=seconds') }}
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Generate README with instructions (no plaintext password)
+      copy:
+        dest: "{{ msf_docs_dir }}/README.txt"
+        content: |
+          ==========================================================
+          NG-SOC - Metasploit Deployment
+          ==========================================================
+          Container (DB)    : {{ msf_db_service_name }}
+          Container (MSF)   : {{ msf_app_service_name }}
+          Postgres image    : {{ postgres_image }}
+          Metasploit image  : {{ metasploit_image }}
+
+          Data dir (postgres): {{ msf_pg_data }}
+          MSF data (.msf4)   : {{ msf_data }}
+          Logs dir           : {{ msf_log_dir }}
+
+          DB user: {{ msf_db_user }}
+          DB name: {{ msf_db_name }}
+
+          Observações:
+          - As credenciais completas foram gravadas em: {{ msf_docs_dir }}/credentials.txt (modo 0600, root:root).
+          - Recomendamos mover essas credenciais para um cofre seguro (ansible-vault, HashiCorp Vault, Azure Key Vault) e remover o arquivo plaintext quando apropriado.
+
+          Principais comandos:
+          - Acessar msfconsole:
+            docker exec -it {{ msf_app_service_name }} msfconsole
+          - Checar containers:
+            docker ps
+          - Ver logs do Metasploit:
+            docker logs {{ msf_app_service_name }} --follow
+
+          Generated: {{ lookup('pipe','date --iso-8601=seconds') }}
+        mode: '0640'
+        owner: root
+        group: root
+
+  post_tasks:
+    - name: Display short success message
+      debug:
+        msg: |
+          ==========================================================
+          ✅ METASPLOIT DEPLOYMENT (Ansible) - TAREFA CONCLUÍDA
+          ==========================================================
+          - Metasploit container: {{ msf_app_service_name }}
+          - Postgres container: {{ msf_db_service_name }}
+          - Credentials file: {{ msf_docs_dir }}/credentials.txt (0600, root)
+          - README: {{ msf_docs_dir }}/README.txt

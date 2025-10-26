@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# install_openvas_docker.sh - Deploy OpenVAS / Greenbone via Ansible (NGSOC)
+
+set -euo pipefail
+
+PLAYBOOK_FILE="/opt/ngsoc-deploy/Ansible/playbooks/deploy_openvas.yml"
+NGSOC_DIR="/opt/ngsoc-deploy"
+
+GSA_HOST_PORT="${GSA_HOST_PORT:-9392}"
+GSA_ADMIN_USER="${GSA_ADMIN_USER:-admin}"
+GSA_ADMIN_PASS="${GSA_ADMIN_PASS:-Ng5ocAdm1n!23}"
+
+echo "=========================================================="
+echo "🚀 INÍCIO DA INSTALAÇÃO DO OPENVAS/GVM (VIA ANSIBLE)"
+echo "=========================================================="
+
+if ! command -v ansible-playbook &>/dev/null; then
+  echo "❌ ERRO: Ansible não encontrado. Instale o Ansible antes de continuar."
+  exit 1
+fi
+
+if [ ! -f "${PLAYBOOK_FILE}" ]; then
+  echo "❌ ERRO: Playbook não encontrado em ${PLAYBOOK_FILE}"
+  exit 2
+fi
+
+ansible-playbook --syntax-check "${PLAYBOOK_FILE}"
+
+ansible-playbook "${PLAYBOOK_FILE}" \
+  -i "localhost," \
+  --connection=local \
+  --extra-vars "gsa_host_port=${GSA_HOST_PORT} gsa_admin_user=${GSA_ADMIN_USER} gsa_admin_pass=${GSA_ADMIN_PASS}"
+
+SERVER_IP=$(hostname -I | awk '{print $1}')
+
+echo "=========================================================="
+echo "✅ OPENVAS/GVM DEPLOY CONCLUÍDO COM SUCESSO!"
+echo "=========================================================="
+echo "🌐 Acesse: http://${SERVER_IP}:${GSA_HOST_PORT}/"
+echo "👤 Usuário: ${GSA_ADMIN_USER}"
+echo "🔒 Senha: ${GSA_ADMIN_PASS}"
+echo "📄 Leia: ${NGSOC_DIR}/docs/openvas/README.txt"
+echo "=========================================================="

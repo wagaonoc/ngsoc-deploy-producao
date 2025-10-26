@@ -1,0 +1,60 @@
+<!-- ========== Harbor Decoder ========== -->
+<decoder name="harbor-core-json">
+  <prematch>harbor-core </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="harbor-jobservice-json">
+  <prematch>harbor-jobservice </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="trivy-adapter-json">
+  <prematch>harbor-trivy </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- ========== Metasploit Decoder ========== -->
+<decoder name="metasploit-audit">
+  <prematch>metasploit</prematch>
+  <regex>^\S+\s+\d+\s+\d+:\d+:\d+\s+\S+\s+metasploit\s+(.*)$</regex>
+  <order>program_name</order>
+</decoder>
+
+<!-- ========== Mitmproxy Decoder ========== -->
+<decoder name="mitmproxy-audit">
+  <prematch>mitmproxy</prematch>
+  <regex>^\S+\s+\d+\s+\d+:\d+:\d+\s+\S+\s+mitmproxy\s+(.*)$</regex>
+  <order>program_name</order>
+</decoder>
+
+<!-- Fallback caso o log venha sem program_name (puro mitmproxy) -->
+<decoder name="mitmproxy-audit-raw">
+  <prematch>MITMPROXY</prematch>
+  <regex>^\S+\s+\[MITM-[A-Z0-9-]+\]\s+(.*)$</regex>
+  <order>srcip</order>
+</decoder>
+<!-- Mitmproxy JSON decoder (se as linhas post-processed forem JSON) -->
+<decoder name="mitmproxy-json">
+  <prematch>mitmproxy </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- Mitmproxy plain/text audit decoder -->
+<decoder name="mitmproxy-audit">
+  <prematch>mitmproxy</prematch>
+  <regex>^\S+\s+\d+\s+\d+:\d+:\d+\s+\S+\s+mitmproxy\s+(.*)$</regex>
+  <order>program_name</order>
+</decoder>
+<!-- Mitmproxy JSON decoder (se as linhas post-processed forem JSON) -->
+<decoder name="mitmproxy-json">
+  <prematch>mitmproxy </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- Mitmproxy plain/text audit decoder -->
+<decoder name="mitmproxy-audit">
+  <prematch>mitmproxy</prematch>
+  <regex>^\S+\s+\d+\s+\d+:\d+:\d+\s+\S+\s+mitmproxy\s+(.*)$</regex>
+  <order>program_name</order>
+</decoder>

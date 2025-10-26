@@ -1,0 +1,23 @@
+#!/bin/bash
+PLAYBOOK_FILE="/opt/ngsoc-deploy/Ansible/playbooks/deploy_openvas.yml"
+
+echo "=========================================================="
+echo "🚀 INÍCIO DA INSTALAÇÃO DO OPENVAS/GVM (VIA ANSIBLE)"
+echo "=========================================================="
+
+if ! command -v ansible-playbook &> /dev/null; then
+  echo "❌ ERRO CRÍTICO: Ansible não encontrado. Instale o Ansible (ver scripts/install_ansible.sh)"
+  exit 1
+fi
+
+set -e
+
+echo "[1/5] Executando playbook: $PLAYBOOK_FILE"
+if ansible-playbook "$PLAYBOOK_FILE"; then
+  echo "✅ PLAYBOOK EXECUTADO COM SUCESSO"
+  echo "Acesse a UI do GSA em: http://$(hostname -I | awk '{print $1}'):9392/"
+  exit 0
+else
+  echo "❌ ERRO: O playbook falhou. Verifique o output do ansible e os logs dos containers."
+  exit 2
+fi

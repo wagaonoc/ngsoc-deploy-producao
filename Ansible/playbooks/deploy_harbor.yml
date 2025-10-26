@@ -1,0 +1,41 @@
+#!/bin/bash
+set -e
+
+INSTALL_DIR="/opt/ngsoc-deploy/data/harbor/installer"
+
+echo "=========================================================="
+echo "🚀 DEPLOY DO HARBOR"
+echo "=========================================================="
+
+# 1. Validar docker-compose existente
+if [ ! -f "${INSTALL_DIR}/docker-compose.yml" ]; then
+  echo "❌ Arquivo docker-compose.yml não encontrado em ${INSTALL_DIR}"
+  exit 1
+fi
+
+# 2. Subir containers
+echo "🧱 Iniciando containers..."
+docker compose -f "${INSTALL_DIR}/docker-compose.yml" up -d
+
+# 3. Aguardar inicialização
+echo "⏳ Aguardando inicialização do Harbor..."
+sleep 20
+
+# 4. Verificar saúde do jobservice
+echo "🔍 Verificando saúde do jobservice..."
+if docker compose -f "${INSTALL_DIR}/docker-compose.yml" ps | grep -q "harbor-jobservice"; then
+  STATUS=$(docker compose -f "${INSTALL_DIR}/docker-compose.yml" ps | grep harbor-jobservice | awk '{print $6}')
+  echo "📊 Status atual do jobservice: ${STATUS}"
+else
+  echo "⚠️  Jobservice não encontrado."
+fi
+
+# 5. Testar manualmente o endpoint interno
+echo "🌐 Testando endpoint interno de saúde..."
+docker exec harbor-jobservice curl -s http://localhost:8080/ > /dev/null 2>&1 && echo "✅ Jobservice ativo e respondendo na porta 8080!" || echo "❌ Falha ao acessar o jobservice."
+
+# 6. Resumo
+echo "=========================================================="
+echo "🎯 STATUS FINAL DO DEPLOY"
+docker compose -f "${INSTALL_DIR}/docker-compose.yml" ps
+echo "=========================================================="

@@ -1,0 +1,108 @@
+---
+- name: Deploy Trivy (CLI + Server RPC mode)
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    trivy_container_name: ngsoc_trivy
+    trivy_image: aquasec/trivy:0.44.1
+    trivy_server_port: 4954
+    trivy_data_dir: /opt/ngsoc-deploy/data/trivy
+    trivy_logs_dir: /opt/ngsoc-deploy/logs/trivy
+    trivy_reports_dir: /opt/ngsoc-deploy/reports/trivy
+    trivy_proxy_conf_dir: /opt/ngsoc-deploy/data/trivy-proxy/nginx-conf
+    trivy_proxy_auth_dir: /opt/ngsoc-deploy/data/trivy-proxy/nginx-auth
+
+  tasks:
+
+    - name: Ensure directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ trivy_data_dir }}"
+        - "{{ trivy_logs_dir }}"
+        - "{{ trivy_reports_dir }}"
+        - "{{ trivy_proxy_conf_dir }}"
+        - "{{ trivy_proxy_auth_dir }}"
+
+    - name: Remove existing Trivy container (idempotent)
+      community.docker.docker_container:
+        name: "{{ trivy_container_name }}"
+        state: absent
+
+    - name: Pull Trivy image
+      community.docker.docker_image:
+        name: "{{ trivy_image }}"
+        source: pull
+
+    - name: Run Trivy container (server RPC mode)
+      community.docker.docker_container:
+        name: "{{ trivy_container_name }}"
+        image: "{{ trivy_image }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ trivy_server_port }}:4954"
+        volumes:
+          - "{{ trivy_data_dir }}:/trivy/data"
+          - "{{ trivy_logs_dir }}:/trivy/logs"
+          - "{{ trivy_reports_dir }}:/trivy/reports"
+        command: "server --listen :{{ trivy_server_port }} --cache-dir /trivy/data"
+
+    - name: Short pause to ensure container startup
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Download Trivy vulnerability DB (inside container)
+      ansible.builtin.command: "docker exec {{ trivy_container_name }} trivy image --download-db-only"
+      ignore_errors: yes
+
+    - name: Create README for Trivy usage
+      copy:
+        dest: /opt/ngsoc-deploy/docs/trivy/README.txt
+        content: |
+          ==========================================================
+          NG-SOC - Trivy Usage & Access
+          ==========================================================
+          Container       : {{ trivy_container_name }}
+          Mode            : server (RPC, não GUI)
+          Image           : {{ trivy_image }}
+          Data dir        : {{ trivy_data_dir }}
+          Logs dir        : {{ trivy_logs_dir }}
+          Reports dir     : {{ trivy_reports_dir }}
+          Proxy config    : {{ trivy_proxy_conf_dir }}
+          Proxy auth      : {{ trivy_proxy_auth_dir }}
+          Server API Port : {{ trivy_server_port }}
+          Access Point    : http://<IP_DO_SERVIDOR>:{{ trivy_server_port }} (API/RPC)
+          Basic Auth      : trivy/trivy (Ativo se Nginx Proxy for implantado)
+
+          Modo de uso do Trivy:
+          - CLI mode:
+            docker exec -it {{ trivy_container_name }} trivy <options>
+
+          - Server mode (RPC, não GUI):
+            Utilize o Trivy client para se conectar ao servidor:
+            docker exec -it {{ trivy_container_name }} sh -c "TRIVY_SERVER='http://localhost:{{ trivy_server_port }}' trivy image alpine:latest"
+
+          Nota:
+          - Server mode é RPC: **não há interface web**, apenas acesso via client.
+          - Certifique-se de mapear corretamente a porta {{ trivy_server_port }}.
+          - Logs e reports são persistidos nos diretórios listados acima.
+          - Para atualizar o DB de vulnerabilidades (CLI mode):
+            docker exec -it {{ trivy_container_name }} trivy image --download-db-only
+
+    - name: Display Trivy deployment summary
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          ✅ TRIVY DEPLOY SUMMARY
+          ==========================================================
+          Container       : {{ trivy_container_name }}
+          Mode            : server (RPC)
+          Image           : {{ trivy_image }}
+          Server API Port : {{ trivy_server_port }}
+          Access Point    : http://<IP_DO_SERVIDOR>:{{ trivy_server_port }} (API/RPC)
+          Logs dir        : {{ trivy_logs_dir }}
+          Reports dir     : {{ trivy_reports_dir }}
+          ==========================================================

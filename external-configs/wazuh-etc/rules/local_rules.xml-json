@@ -1,0 +1,22 @@
+<group name="harbor-rules">
+  <!-- Detecta 401 -->
+  <rule id="100900" level="7">
+    <decoded_as>harbor-core-json</decoded_as>
+    <description>Harbor core: falha de autenticação (401)</description>
+    <regex field="status">401</regex>
+  </rule>
+
+  <!-- Detecta 403 -->
+  <rule id="100901" level="8">
+    <decoded_as>harbor-core-json</decoded_as>
+    <description>Harbor core: acesso proibido (403)</description>
+    <regex field="status">403</regex>
+  </rule>
+
+  <!-- Detecta 500 -->
+  <rule id="100902" level="10">
+    <decoded_as>harbor-core-json</decoded_as>
+    <description>Harbor core: erro interno (500)</description>
+    <regex field="status">500</regex>
+  </rule>
+</group>

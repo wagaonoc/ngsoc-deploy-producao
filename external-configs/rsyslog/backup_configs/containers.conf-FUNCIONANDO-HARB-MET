@@ -1,0 +1,95 @@
+# /etc/rsyslog.d/containers.conf
+# Rsyslog config for container logs -> writes to /var/log/<app>/*.log
+# Only load imfile here (do NOT re-load imuxsock or imjournal which are usually loaded globally)
+
+module(load="imfile")        # only imfile module
+
+# Templates -> destination files
+template(name="T_HarborCore" type="string" string="/var/log/harbor/core.log")
+template(name="T_HarborJob"  type="string" string="/var/log/harbor/jobservice.log")
+template(name="T_HarborTrivy" type="string" string="/var/log/harbor/trivy-adapter.log")
+template(name="T_HarborProxy" type="string" string="/var/log/harbor/proxy.log")
+
+template(name="T_Greenbone" type="string" string="/var/log/greenbone/greenbone.log")
+template(name="T_Metasploit" type="string" string="/var/log/metasploit/framework.log")
+template(name="T_Mitmproxy" type="string" string="/var/log/mitmproxy/mitmproxy.log")
+template(name="T_ZAP" type="string" string="/var/log/zap/zap.log")
+
+# Routing by programname (created by imfile Tag)
+if ($programname == "harbor-core") then {
+    action(type="omfile" dynaFile="T_HarborCore")
+    stop
+}
+else if ($programname == "harbor-jobservice") then {
+    action(type="omfile" dynaFile="T_HarborJob")
+    stop
+}
+else if ($programname == "harbor-trivy") then {
+    action(type="omfile" dynaFile="T_HarborTrivy")
+    stop
+}
+else if ($programname == "harbor-proxy") then {
+    action(type="omfile" dynaFile="T_HarborProxy")
+    stop
+}
+else if ($programname startswith "greenbone") then {
+    action(type="omfile" dynaFile="T_Greenbone")
+    stop
+}
+else if ($programname == "metasploit") then {
+    action(type="omfile" dynaFile="T_Metasploit")
+    stop
+}
+else if ($programname == "mitmproxy") then {
+    action(type="omfile" dynaFile="T_Mitmproxy")
+    stop
+}
+else if ($programname == "zap") then {
+    action(type="omfile" dynaFile="T_ZAP")
+    stop
+}
+
+# NOTE: descartes temporariamente comentados durante validação
+# if ($msg contains "health check") or ($msg contains "GET /api/ping") then stop
+# if ($msg contains "debug") then stop
+
+# ===== imfile inputs (watching files written by containers to host)
+# Adjust PollingInterval as needed (10s is a conservative start)
+input(type="imfile"
+      File="/opt/ngsoc-deploy/logs/harbor/core/core.log"
+      Tag="harbor-core"
+      Severity="info"
+      Facility="local6"
+      reopenOnTruncate="on")
+
+input(type="imfile"
+      File="/opt/ngsoc-deploy/logs/harbor/jobservice/jobservice.log"
+      Tag="harbor-jobservice"
+      Severity="info"
+      Facility="local6"
+      reopenOnTruncate="on")
+
+input(type="imfile"
+      File="/opt/ngsoc-deploy/logs/harbor/trivy-adapter/trivy.log"
+      Tag="harbor-trivy"
+      Severity="info"
+      Facility="local6"
+      reopenOnTruncate="on")
+
+# BEGIN managed mitmproxy imfile (added by admin)
+input(type="imfile"
+      File="/opt/ngsoc-deploy/data/mitmproxy/mitmproxy.log"
+      Tag="mitmproxy"
+      Severity="info"
+      Facility="local6"
+      reopenOnTruncate="on")
+# END managed mitmproxy imfile
+
+# BEGIN managed metasploit imfile (added by admin ${TS})
+input(type="imfile"
+      File="/opt/ngsoc-deploy/logs/metasploit/framework.log"
+      Tag="metasploit"
+      Severity="info"
+      Facility="local6"
+      reopenOnTruncate="on")
+# END managed metasploit imfile

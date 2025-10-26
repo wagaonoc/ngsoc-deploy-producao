@@ -1,0 +1,45 @@
+<!-- Minimal local decoders for Harbor / Metasploit / Mitmproxy / Trivy -->
+<!-- POSIX regex; avoid embedding commands or extra text -->
+
+<!-- Harbor JSON decoders -->
+<decoder name="harbor-core-json">
+  <prematch>harbor-core </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="harbor-jobservice-json">
+  <prematch>harbor-jobservice </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="trivy-adapter-json">
+  <prematch>harbor-trivy </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- Metasploit: console audit plain text -->
+<decoder name="metasploit-audit">
+  <prematch>metasploit</prematch>
+  <regex>^[^[:space:]]+[[:space:]][0-9]+[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]][^[:space:]]+[[:space:]]metasploit[[:space:]](.*)$</regex>
+  <order>program_name</order>
+</decoder>
+
+<!-- Mitmproxy: JSON (only if payload begins with '{') -->
+<decoder name="mitmproxy-json">
+  <prematch>mitmproxy {</prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- Mitmproxy programname textual logs -->
+<decoder name="mitmproxy-audit">
+  <prematch>mitmproxy</prematch>
+  <regex>^[^[:space:]]+[[:space:]][0-9]+[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}[[:space:]][^[:space:]]+[[:space:]]mitmproxy[[:space:]](.*)$</regex>
+  <order>message</order>
+</decoder>
+
+<!-- Mitmproxy fallback: capture MITM-XXXX anywhere and the remaining message -->
+<decoder name="mitmproxy-audit-raw">
+  <prematch>MITM</prematch>
+  <regex>^.*(MITM-[A-Z0-9-]+)[[:space:]]*(.*)$</regex>
+  <order>id,message</order>
+</decoder>

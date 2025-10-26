@@ -1,0 +1,188 @@
+---
+- name: Deploy Greenbone OpenVAS Modular (Final e Robusto com Todas as Correções)
+  hosts: localhost
+  gather_facts: yes
+  become: yes
+
+  vars:
+    app_name: openvas
+    base_path: /opt/ngsoc-deploy
+    compose_path: "{{ base_path }}/data/{{ app_name }}"
+    compose_file: docker-compose-openvas.yml
+    postgres_password: "SenhaForte_Postgres!"
+    admin_password: "SenhaForte_AdminGVM!"
+    host_ip: "192.168.100.23"
+    gvm_uid: 1001
+
+  tasks:
+
+  - name: 1. Garantir que a rede unificada exista
+    community.docker.docker_network:
+      name: ngsoc_net
+      state: present
+
+  - name: 2. Criar estrutura de diretórios inicial (Logs)
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: directory
+      mode: '0755'
+    loop:
+      - "{{ base_path }}/logs/{{ app_name }}/scanner"
+      - "{{ base_path }}/logs/{{ app_name }}/ospd"
+      - "{{ base_path }}/logs/{{ app_name }}/gvmd"
+      - "{{ base_path }}/logs/{{ app_name }}/gsad"
+
+  - name: 3. Copiar docker-compose atualizado e corrigido (OSPD + GVMD)
+    ansible.builtin.copy:
+      dest: "{{ compose_path }}/{{ compose_file }}"
+      content: |
+        version: "3.8"
+
+        services:
+          postgres:
+            image: postgres:15-alpine
+            restart: unless-stopped
+            environment:
+              POSTGRES_DB: gvmd
+              POSTGRES_USER: gvmd
+              POSTGRES_PASSWORD: "{{ postgres_password }}"
+            volumes:
+              - /opt/ngsoc-deploy/data/openvas/postgres:/var/lib/postgresql/data
+            networks:
+              - ngsoc_net
+
+          redis:
+            image: redis:7-alpine
+            restart: unless-stopped
+            volumes:
+              - /opt/ngsoc-deploy/data/openvas/redis:/data
+            networks:
+              - ngsoc_net
+
+          notus-data:
+            image: registry.community.greenbone.net/community/notus-data:latest
+            restart: unless-stopped
+            volumes:
+              - /opt/ngsoc-deploy/data/openvas/gvm:/var/lib/openvas
+            networks:
+              - ngsoc_net
+
+          openvas-scanner:
+            image: registry.community.greenbone.net/community/openvas-scanner:stable
+            depends_on:
+              - redis
+              - notus-data
+            restart: unless-stopped
+            volumes:
+              - /opt/ngsoc-deploy/data/openvas/gvm:/var/lib/openvas
+              - /opt/ngsoc-deploy/logs/openvas/scanner:/var/log/openvas
+            networks:
+              - ngsoc_net
+
+          ospd-openvas:
+            image: registry.community.greenbone.net/community/ospd-openvas:latest
+            depends_on:
+              - redis
+              - openvas-scanner
+            restart: unless-stopped
+            environment:
+              OPENVASD_HOST: openvas-scanner
+              OPENVASD_PORT: 3000
+              OSPD_PATH: /usr/local/bin/ospd-openvas
+              OSPD_SOCKET: /var/run/ospd/ospd-openvas.sock
+            volumes:
+              - /opt/ngsoc-deploy/data/openvas/gvm:/var/lib/openvas
+              - /opt/ngsoc-deploy/logs/openvas/ospd:/var/log/ospd
+            networks:
+              - ngsoc_net
+
+          gvmd:
+            image: registry.community.greenbone.net/community/gvmd:latest
+            depends_on:
+              - postgres
+              - redis
+              - ospd-openvas
+            restart: unless-stopped
+            environment:
+              DB_HOST: postgres
+              DB_PORT: 5432
+              DB_PASSWORD: "{{ postgres_password }}"
+              GVM_CREATE_ADMIN: "true"
+              GVM_ADMIN_PASSWORD: "{{ admin_password }}"
+            command:
+              [
+                "gvmd",
+                "--database",
+                "postgresql://gvmd:{{ postgres_password }}@postgres:5432/gvmd",
+                "--listen",
+                "0.0.0.0",
+                "--port",
+                "9390"
+              ]
+            volumes:
+              - /opt/ngsoc-deploy/data/openvas/gvm:/var/lib/gvm
+              - /opt/ngsoc-deploy/logs/openvas/gvmd:/var/log/gvm
+            networks:
+              - ngsoc_net
+
+          gsad:
+            image: registry.community.greenbone.net/community/gsad:latest
+            depends_on:
+              - gvmd
+            restart: unless-stopped
+            environment:
+              GSA_PORT: 9392
+              GVM_HOST: gvmd
+            ports:
+              - "{{ host_ip }}:9392:9392"
+            volumes:
+              - /opt/ngsoc-deploy/logs/openvas/gsad:/var/log/gsad
+            networks:
+              - ngsoc_net
+
+        networks:
+          ngsoc_net:
+            external: true
+
+  - name: 4. Parar e remover o stack antigo (limpeza obrigatória)
+    community.docker.docker_compose_v2:
+      project_src: "{{ compose_path }}"
+      files:
+        - "{{ compose_file }}"
+      state: absent
+      remove_volumes: no
+
+  - name: 5. Forçar limpeza de dados persistentes corrompidos
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: absent
+    loop:
+      - "{{ base_path }}/data/{{ app_name }}/postgres"
+      - "{{ base_path }}/data/{{ app_name }}/redis"
+      - "{{ base_path }}/data/{{ app_name }}/gvm"
+
+  - name: 6. Recriar estrutura de diretórios limpos (incluindo subpasta gvmd)
+    ansible.builtin.file:
+      path: "{{ item }}"
+      state: directory
+      mode: '0755'
+    loop:
+      - "{{ base_path }}/data/{{ app_name }}/gvm"
+      - "{{ base_path }}/data/{{ app_name }}/gvm/gvmd"
+      - "{{ base_path }}/data/{{ app_name }}/postgres"
+      - "{{ base_path }}/data/{{ app_name }}/redis"
+
+  - name: 7. Corrigir permissões do volume GVM
+    ansible.builtin.file:
+      path: "{{ base_path }}/data/{{ app_name }}/gvm"
+      owner: "{{ gvm_uid }}"
+      group: "{{ gvm_uid }}"
+      recurse: yes
+
+  - name: 8. Subir o stack Docker (Inicialização final do GVM)
+    community.docker.docker_compose_v2:
+      project_src: "{{ compose_path }}"
+      files:
+        - "{{ compose_file }}"
+      state: present
+      pull: always

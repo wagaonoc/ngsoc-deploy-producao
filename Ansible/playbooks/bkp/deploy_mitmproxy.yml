@@ -1,0 +1,197 @@
+---
+- name: Deploy mitmproxy container and export CA to nginx exports
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  vars:
+    mitm_image: "mitmproxy/mitmproxy"
+    mitm_container_name: "ngsoc_mitmproxy"
+    mitm_proxy_port: 8089
+    mitm_web_port: 8090
+
+    mitm_data_dir: "/opt/ngsoc-deploy/data/mitmproxy"
+    mitm_certs_dir: "{{ mitm_data_dir }}/certs"
+    mitm_logs_dir: "/opt/ngsoc-deploy/logs/mitmproxy"
+    mitm_exports_dir: "/opt/ngsoc-deploy/exports/mitmproxy"
+
+    mitm_ui_pass: "zap"
+    mitm_wait_timeout: 180
+    mitm_wait_delay: 3
+
+    nginx_export_port: 8085
+    export_filename: "mitmproxy-ca-cert.pem"
+
+  tasks:
+    - name: Ensure data, certs, logs and exports directories exist
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0777'
+      loop:
+        - "{{ mitm_data_dir }}"
+        - "{{ mitm_certs_dir }}"
+        - "{{ mitm_logs_dir }}"
+        - "{{ mitm_exports_dir }}"
+
+    - name: Set 0777 mode recursively on mitm data dir (avoid permission issues)
+      ansible.builtin.file:
+        path: "{{ mitm_data_dir }}"
+        state: directory
+        mode: '0777'
+        recurse: yes
+
+    - name: Ensure mitm data dir is owned by UID 1000:GID 1000 (avoid usermod errors)
+      ansible.builtin.file:
+        path: "{{ mitm_data_dir }}"
+        state: directory
+        owner: 1000
+        group: 1000
+        mode: '0775'
+        recurse: yes
+
+    - name: Remove existing mitmproxy container (idempotency)
+      community.docker.docker_container:
+        name: "{{ mitm_container_name }}"
+        state: absent
+        force_kill: true
+      ignore_errors: true
+
+    - name: Pull mitmproxy image (latest)
+      community.docker.docker_image:
+        name: "{{ mitm_image }}"
+        tag: "latest"
+        source: pull
+
+    - name: Run mitmproxy container
+      community.docker.docker_container:
+        name: "{{ mitm_container_name }}"
+        image: "{{ mitm_image }}:latest"
+        restart_policy: always
+        published_ports:
+          - "{{ mitm_proxy_port }}:{{ mitm_proxy_port }}"
+          - "{{ mitm_web_port }}:{{ mitm_web_port }}"
+        volumes:
+          - "{{ mitm_data_dir }}:/home/mitmproxy/.mitmproxy:rw"
+        command:
+          - "mitmweb"
+          - "--listen-host"
+          - "0.0.0.0"
+          - "--listen-port"
+          - "{{ mitm_proxy_port }}"
+          - "--web-host"
+          - "0.0.0.0"
+          - "--web-port"
+          - "{{ mitm_web_port }}"
+          - "--set"
+          - "web_password={{ mitm_ui_pass }}"
+        state: started
+        detach: true
+
+    - name: Wait until docker reports container running (poll)
+      ansible.builtin.shell: |
+        docker inspect --format='{% raw %}{{.State.Status}}{% endraw %}' {{ mitm_container_name }} 2>/dev/null || echo notfound
+      register: cont_state
+      until: cont_state.stdout.find('running') != -1
+      retries: 30
+      delay: 2
+      failed_when: cont_state.stdout.find('running') == -1
+
+    - name: Short pause to let mitmweb initialize
+      ansible.builtin.pause:
+        seconds: 4
+
+    - name: Force access to /mitm.it and UI to trigger CA creation (robust)
+      ansible.builtin.shell: |
+        set -e
+        CONTAINER={{ mitm_container_name }}
+        HOSTIP="{{ ansible_default_ipv4.address }}"
+        # try internal access to /mitm.it via curl or wget
+        docker exec $CONTAINER sh -c "(command -v curl >/dev/null 2>&1 && curl -s --max-time 3 http://mitm.it/) || (command -v wget >/dev/null 2>&1 && wget -qO- --timeout=3 http://mitm.it/) || true"
+        # try accessing UI by host ip from inside container (forces generation on some setups)
+        docker exec $CONTAINER sh -c "(command -v curl >/dev/null 2>&1 && curl -s --max-time 3 http://$HOSTIP:{{ mitm_web_port }}/) || true" || true
+      register: ca_force
+      changed_when: false
+      ignore_errors: true
+
+    - name: Wait for mitm CA file to appear on host (timeout)
+      ansible.builtin.wait_for:
+        path: "{{ mitm_data_dir }}/{{ export_filename }}"
+        state: present
+        timeout: 120
+      register: ca_wait
+      ignore_errors: true
+
+    - name: Try to copy mitmproxy CA from container to exports (multi-path)
+      ansible.builtin.shell: |
+        set -e
+        TARGET="{{ mitm_exports_dir }}/{{ export_filename }}"
+        CONTAINER={{ mitm_container_name }}
+        for p in /home/mitmproxy/.mitmproxy/{{ export_filename }} /root/.mitmproxy/{{ export_filename }}; do
+          if docker exec $CONTAINER test -f "$p"; then
+            docker cp $CONTAINER:"$p" "$TARGET" && echo "COPIED_FROM_CONTAINER:$p" && exit 0
+          fi
+        done
+        if [ -f "{{ mitm_certs_dir }}/{{ export_filename }}" ]; then
+          cp -f "{{ mitm_certs_dir }}/{{ export_filename }}" "$TARGET" && echo "COPIED_FROM_HOST_DATA" && exit 0
+        fi
+        echo "NO_CERT"
+      register: mitm_copy_result
+      failed_when: false
+      changed_when: "'COPIED' in mitm_copy_result.stdout"
+
+    - name: Ensure correct permissions on export files (if present)
+      ansible.builtin.file:
+        path: "{{ mitm_exports_dir }}/{{ export_filename }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: mitm_copy_result.stdout is defined and mitm_copy_result.stdout != "NO_CERT"
+      ignore_errors: true
+
+    - name: Create README-testers in exports dir for testers
+      ansible.builtin.copy:
+        dest: "{{ mitm_exports_dir }}/README-testers.txt"
+        content: |
+          NG-SOC - MITMProxy Test Instructions
+          ------------------------------------
+          - CA file: {{ export_filename }}
+          - Download URL (example):
+            http://{{ ansible_default_ipv4.address }}:{{ nginx_export_port }}/{{ export_filename }}
+          - Proxy host: {{ ansible_default_ipv4.address }}
+          - Proxy port: {{ mitm_proxy_port }}
+          - Mitmweb UI: http://{{ ansible_default_ipv4.address }}:{{ mitm_web_port }}/#/flows
+        mode: '0644'
+
+    - name: Check if nginx exports container (ngsoc_exports) is running
+      ansible.builtin.shell: |
+        docker ps --filter "name=ngsoc_exports" --format '{{"{{.Names}}:{{.Status}}"}}' || true
+      register: nginx_running
+      changed_when: false
+
+    - name: Validate CA URL via localhost (only if ngsoc_exports is running)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ nginx_export_port }}/{{ export_filename }}"
+        method: GET
+        status_code: 200
+        return_content: false
+      register: ca_url_check
+      when: "'ngsoc_exports' in (nginx_running.stdout | default('')) and (mitm_copy_result.stdout is defined and mitm_copy_result.stdout != 'NO_CERT')"
+      ignore_errors: true
+
+    - name: Final summary (MITM)
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          MITMProxy DEPLOY SUMMARY
+          ==========================================================
+          Container: {{ mitm_container_name }}
+          Web UI : http://{{ ansible_default_ipv4.address }}:{{ mitm_web_port }}/#/flows
+          Proxy  : {{ ansible_default_ipv4.address }}:{{ mitm_proxy_port }}
+          CA present in exports: {{ mitm_copy_result.stdout | default('NO_CERT') }}
+          CA exports path       : {{ mitm_exports_dir }}/{{ export_filename }}
+          CA URL (expected)     : http://{{ ansible_default_ipv4.address }}:{{ nginx_export_port }}/{{ export_filename }}
+          Nginx exports running : {{ nginx_running.stdout | default('NOT RUNNING') }}
+          CA URL check (200 OK) : {{ (ca_url_check.status is defined and ca_url_check.status == 200) | ternary('YES','NO') }}
+          ==========================================================

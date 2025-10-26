@@ -1,0 +1,79 @@
+##!/bin/bash
+# install_harbor.sh - Versão V3 (Mensagem final formatada e limpa)
+
+# Variáveis (Devem refletir as do playbook para a mensagem final)
+ANSIBLE_PLAYBOOK="/opt/ngsoc-deploy/Ansible/playbooks/deploy_harbor.yml"
+HARBOR_INSTALLER_DIR="/opt/ngsoc-deploy/data/harbor/installer"
+HARBOR_DOCS_PATH="/opt/ngsoc-deploy/docs/harbor/README.txt"
+
+# Variáveis de Acesso (Devem refletir as do playbook)
+HARBOR_HOSTNAME="harbor.local"
+HARBOR_HTTPS_PORT="8443"
+HARBOR_ADMIN_USER="admin"
+HARBOR_ADMIN_PASS="Harbor12345"
+
+echo "=========================================================="
+echo "🚀 INÍCIO: Instalação/Provisionamento do Harbor (Ansible)"
+echo "=========================================================="
+
+# 1. Limpeza e Validação Inicial
+echo "🧹 Limpando repositórios Docker antigos..."
+rm -f /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
+rm -f /etc/apt/keyrings/docker.gpg
+
+echo "🔍 Validando apt update inicial..."
+if ! sudo apt update; then
+    echo "🚨 FALHA: O comando 'apt update' falhou. Verifique sua conectividade ou repositórios."
+    exit 1
+fi
+
+# 2. Execução do Playbook
+echo "🔍 Verificando sintaxe do Playbook..."
+ansible-playbook --syntax-check "$ANSIBLE_PLAYBOOK"
+
+if [ $? -ne 0 ]; then
+    echo "🚨 FALHA: Sintaxe do Playbook inválida."
+    exit 1
+fi
+
+echo "🚀 Executando Playbook..."
+ansible-playbook "$ANSIBLE_PLAYBOOK"
+
+# O Ansible pode retornar 0 mesmo com falhas (devido ao ignore_errors).
+# Continuamos para a verificação de status real.
+if [ $? -ne 0 ]; then
+    echo "⚠️ AVISO: O Playbook do Harbor retornou um código de erro. Verificando o status real dos containers..."
+fi
+
+# 3. Verificação de Status Final (Pós-Playbook)
+echo "🔍 Verificando o status dos containers do Harbor..."
+
+# Conta o número de containers críticos (nginx e harbor-core) que estão "Up"
+# Para esta verificação, usamos 'grep -E' para buscar por ambos, e 'grep -i " Up "' para garantir o status
+HARBOR_STATUS=$(cd $HARBOR_INSTALLER_DIR 2>/dev/null && docker compose ps -a | grep -E '(nginx|harbor-core)' | grep -i ' Up ' | wc -l)
+EXPECTED_CRITICAL_CONTAINERS=2
+
+if [ "$HARBOR_STATUS" -lt "$EXPECTED_CRITICAL_CONTAINERS" ]; then
+    echo "=========================================================="
+    echo "🚨 FALHA: O Harbor falhou ao subir. Apenas $HARBOR_STATUS de $EXPECTED_CRITICAL_CONTAINERS containers críticos (core, nginx) estão rodando."
+    echo "Para detalhes e troubleshooting, consulte: $HARBOR_DOCS_PATH"
+    echo "=========================================================="
+    exit 1
+fi
+
+# 4. Mensagem de Sucesso e Referência à Documentação (FORMATO LISTA)
+echo "=========================================================="
+echo "✅ HARBOR DEPLOYMENT CONCLUÍDO COM SUCESSO!"
+echo "=========================================================="
+echo "Detalhes de Acesso Rápido:"
+echo ""
+echo "  🌐 Portal Web (HTTPS):"
+echo "    - Link: https://${HARBOR_HOSTNAME}:${HARBOR_HTTPS_PORT}"
+echo ""
+echo "  🔒 Credenciais Administrativas:"
+echo "    - Usuário: ${HARBOR_ADMIN_USER}"
+echo "    - Senha: ${HARBOR_ADMIN_PASS}"
+echo ""
+echo "  📄 Documentação Completa e Comandos (README):"
+echo "    - Caminho: ${HARBOR_DOCS_PATH}"
+echo "----------------------------------------------------------"

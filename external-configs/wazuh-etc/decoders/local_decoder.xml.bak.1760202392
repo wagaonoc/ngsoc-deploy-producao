@@ -1,0 +1,36 @@
+<decoder name="harbor-core-json">
+  <prematch>harbor-core </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="harbor-jobservice-json">
+  <prematch>harbor-jobservice </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="trivy-adapter-json">
+  <prematch>harbor-trivy </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- ========== Metasploit Decoder ========== -->
+<decoder name="metasploit-audit">
+  <prematch>metasploit</prematch>
+  <regex>^\S+\s+\d+\s+\d+:\d+:\d+\s+\S+\s+metasploit\s+(.*)$</regex>
+  <order>program_name</order>
+</decoder>
+<!-- ======================================== -->
+
+<!-- ========== Mitmproxy Decoder ========== -->
+<decoder name="mitmproxy-base">
+  <prematch>mitmproxy </prematch>
+  <order>program_name</order>
+</decoder>
+
+<!-- Linhas com ISO timestamp e [TAG] Mensagem -->
+<decoder name="mitmproxy-audit">
+  <parent>mitmproxy-base</parent>
+  <regex>^\S+\s+\d+\s+\d+:\d+:\d+\s+\S+\s+mitmproxy\s+(.*)$</regex>
+  <order>program_name</order>
+</decoder>
+<!-- ====================================== -->

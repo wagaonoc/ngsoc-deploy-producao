@@ -1,0 +1,115 @@
+---
+- name: "Deploy Greenbone / OpenVAS (NGSOC) - Estrutura Padronizada e Idempotente"
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars:
+    ngsoc_dir: /opt/ngsoc-deploy
+    openvas_data_dir: "{{ ngsoc_dir }}/data/openvas"
+    openvas_logs_dir: "{{ ngsoc_dir }}/logs/openvas"
+    openvas_docs_dir: "{{ ngsoc_dir }}/docs/openvas"
+    openvas_exports_dir: "{{ ngsoc_dir }}/exports/openvas"
+    openvas_reports_dir: "{{ ngsoc_dir }}/reports/openvas"
+
+    gsa_host_port: "{{ gsa_host_port | default(9392) }}"
+    gsa_admin_user: "{{ gsa_admin_user | default('admin') }}"
+    gsa_admin_pass: "{{ gsa_admin_pass | default('Ng5ocAdm1n!23') }}"
+
+  tasks:
+    - name: "1. Criar estrutura base de diretórios"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0775'
+        owner: 1001
+        group: root
+      loop:
+        - "{{ openvas_data_dir }}"
+        - "{{ openvas_logs_dir }}"
+        - "{{ openvas_docs_dir }}"
+        - "{{ openvas_exports_dir }}"
+        - "{{ openvas_reports_dir }}"
+        - "{{ openvas_data_dir }}/gvmd-data"
+        - "{{ openvas_data_dir }}/psql-data"
+        - "{{ openvas_data_dir }}/redis-socket"
+        - "{{ openvas_data_dir }}/ospd-openvas-socket"
+        - "{{ openvas_data_dir }}/gvmd-socket"
+        - "{{ openvas_data_dir }}/feed-data"
+
+    - name: "2. Garantir link com rsyslog para leitura dos logs OpenVAS"
+      lineinfile:
+        path: /etc/rsyslog.d/containers.conf
+        create: yes
+        line: 'input(type="imfile" File="{{ openvas_logs_dir }}/*.log" Tag="openvas" Severity="info" Facility="local0")'
+      notify: Restart rsyslog
+
+    - name: "3. Criar README de acesso e documentação"
+      ansible.builtin.copy:
+        dest: "{{ openvas_docs_dir }}/README.txt"
+        mode: '0644'
+        content: |
+          ==========================================================
+          NG-SOC - OpenVAS / Greenbone Vulnerability Management
+          ==========================================================
+
+          🌐 PORTAL WEB (GSA)
+          - URL: http://192.168.100.23:{{ gsa_host_port }}
+          - Usuário: {{ gsa_admin_user }}
+          - Senha: {{ gsa_admin_pass }}
+
+          🐳 CONTAINERS PRINCIPAIS
+          - pg-gvm ........ Banco PostgreSQL
+          - redis-server .. Cache de sessão
+          - ospd-openvas .. Scanner de vulnerabilidades
+          - gvmd .......... Manager (coordena usuários e relatórios)
+          - gsa ........... Interface Web
+
+          📁 DIRETÓRIOS
+          - Dados:    {{ openvas_data_dir }}
+          - Logs:     {{ openvas_logs_dir }}
+          - Reports:  {{ openvas_reports_dir }}
+          - Exports:  {{ openvas_exports_dir }}
+          - Docs:     {{ openvas_docs_dir }}
+
+          ⚙️ TROUBLESHOOTING
+          - Status: docker ps | grep greenbone
+          - Logs:   tail -f {{ openvas_logs_dir }}/gvmd.log
+          - Stop:   docker compose down
+          - Reinit: docker compose up -d
+
+          ⚠️ NOTAS
+          1. Logs espelhados em /var/log/openvas via rsyslog.
+          2. Primeira sincronização de feeds pode levar até 30 minutos.
+
+    - name: "4. Subir containers OpenVAS via Compose"
+      community.docker.docker_compose:
+        project_src: "{{ openvas_data_dir }}/greenbone"
+        state: present
+        pull: yes
+
+    - name: "5. Esperar GSA subir"
+      ansible.builtin.wait_for:
+        host: "192.168.100.23"
+        port: "{{ gsa_host_port }}"
+        timeout: 300
+        state: started
+
+    - name: "6. Criar credenciais"
+      ansible.builtin.copy:
+        dest: "{{ openvas_docs_dir }}/credentials.txt"
+        mode: '0600'
+        content: |
+          ==========================================================
+          NG-SOC - OpenVAS Credentials
+          ==========================================================
+          URL: http://192.168.100.23:{{ gsa_host_port }}
+          User: {{ gsa_admin_user }}
+          Pass: {{ gsa_admin_pass }}
+          ==========================================================
+
+  handlers:
+    - name: Restart rsyslog
+      ansible.builtin.service:
+        name: rsyslog
+        state: restarted

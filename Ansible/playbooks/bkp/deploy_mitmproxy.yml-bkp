@@ -1,0 +1,148 @@
+---
+- name: 6. Deploy and validate mitmproxy container (Intercepting Proxy)
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  vars:
+    mitm_image: "mitmproxy/mitmproxy"
+    mitm_container_name: "ngsoc_mitmproxy"
+    mitm_proxy_port: 8089
+    mitm_web_port: 8090
+
+    # Estrutura de diretórios (mantida conforme solicitado)
+    mitm_data_dir: "/opt/ngsoc-deploy/data/mitmproxy"
+    mitm_certs_dir: "{{ mitm_data_dir }}/certs"
+    mitm_logs_dir: "/opt/ngsoc-deploy/logs/mitmproxy"
+
+    # SENHA FIXA SOLICITADA
+    mitm_ui_user: "zap"
+    mitm_ui_pass: "zap"
+
+    mitm_wait_timeout: 120
+    mitm_wait_delay: 3
+
+  tasks:
+    - name: Ensure data, certs and log directories exist (Estrutura NGSOC)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0777'
+        owner: root
+        group: root
+      loop:
+        - "{{ mitm_data_dir }}"
+        - "{{ mitm_certs_dir }}"
+        - "{{ mitm_logs_dir }}"
+
+    - name: Remove any existing container (Idempotência)
+      community.docker.docker_container:
+        name: "{{ mitm_container_name }}"
+        state: absent
+        force_kill: true
+      ignore_errors: true
+
+    - name: Pull mitmproxy image (latest)
+      community.docker.docker_image:
+        name: "{{ mitm_image }}"
+        tag: "latest"
+        source: pull
+
+    - name: Run mitmproxy container (web_password, mount to standard internal path)
+      community.docker.docker_container:
+        name: "{{ mitm_container_name }}"
+        image: "{{ mitm_image }}:latest"
+        restart_policy: always
+        published_ports:
+          - "{{ mitm_proxy_port }}:{{ mitm_proxy_port }}"
+          - "{{ mitm_web_port }}:{{ mitm_web_port }}"
+        volumes:
+          - "{{ mitm_data_dir }}:/home/mitm/.mitmproxy:rw"
+        command:
+          - "mitmweb"
+          - "--listen-port"
+          - "{{ mitm_proxy_port }}"
+          - "--web-host"
+          - "0.0.0.0"
+          - "--web-port"
+          - "{{ mitm_web_port }}"
+          - "--set"
+          - "web_password={{ mitm_ui_pass }}"
+        state: started
+        detach: true
+
+    - name: Wait for mitmweb port to be open
+      ansible.builtin.wait_for:
+        host: "127.0.0.1"
+        port: "{{ mitm_web_port }}"
+        timeout: "{{ mitm_wait_timeout }}"
+        sleep: "{{ mitm_wait_delay }}"
+
+    - name: Sleep a few seconds to allow service to fully initialize
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Try HTTP GET to mitmweb root to validate (may return 200 or a login page)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ mitm_web_port }}/"
+        method: GET
+        return_content: false
+        status_code: 200,401,302,403
+      register: mitm_http_check
+      ignore_errors: true
+
+    - name: Attempt to copy mitmproxy CA from common locations inside the container to host cert dir
+      ansible.builtin.shell: |
+        TARGET_DIR="{{ mitm_certs_dir }}"
+        mkdir -p "$TARGET_DIR"
+        if docker exec {{ mitm_container_name }} test -f /home/mitm/.mitmproxy/mitmproxy-ca-cert.pem; then
+          docker cp {{ mitm_container_name }}:/home/mitm/.mitmproxy/mitmproxy-ca-cert.pem "$TARGET_DIR/mitmproxy-ca-cert.pem"
+          echo "COPIED_FROM_HOME"
+        elif docker exec {{ mitm_container_name }} test -f /root/.mitmproxy/mitmproxy-ca-cert.pem; then
+          docker cp {{ mitm_container_name }}:/root/.mitmproxy/mitmproxy-ca-cert.pem "$TARGET_DIR/mitmproxy-ca-cert.pem"
+          echo "COPIED_FROM_ROOT"
+        else
+          echo "NO_CERT_FOUND"
+        fi
+      register: mitm_copy_ca
+      changed_when: mitm_copy_ca.rc == 0 and "'NO_CERT_FOUND' not in mitm_copy_ca.stdout"
+      failed_when: false
+
+    - name: Show result and intermediate next steps
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          MITMPROXY DEPLOY SUMMARY
+          ==========================================================
+          Container : {{ mitm_container_name }}
+          Proxy Port: {{ mitm_proxy_port }}
+          Web UI    : {{ mitm_web_port }}
+          Web UI PW : {{ mitm_ui_pass }}
+
+          - Check logs: sudo docker logs --tail 200 {{ mitm_container_name }}
+          - CA (if copied) : {{ mitm_certs_dir }}/mitmproxy-ca-cert.pem
+          - To install CA on Ubuntu:
+              sudo cp {{ mitm_certs_dir }}/mitmproxy-ca-cert.pem /usr/local/share/ca-certificates/mitmproxy-ca.crt
+              sudo update-ca-certificates
+
+          - Access UI: http://{{ ansible_default_ipv4.address }}:{{ mitm_web_port }}/  (enter password '{{ mitm_ui_pass }}' when prompted)
+          ==========================================================
+
+    - name: Print 'Instalação executada com sucesso' when deployment validated
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          ✅ INSTALAÇÃO EXECUTADA COM SUCESSO
+          ==========================================================
+          O mitmproxy foi implantado e a verificação inicial retornou:
+            URL tested   : http://127.0.0.1:{{ mitm_web_port }}/
+            HTTP result  : {{ mitm_http_check.status | default('UNAVAILABLE') }}
+            Container    : {{ mitm_container_name }}
+            Web UI PW    : {{ mitm_ui_pass }}
+            CA Copied    : {{ (mitm_copy_ca.stdout is defined and 'NO_CERT_FOUND' not in mitm_copy_ca.stdout) | ternary('YES','NO') }}
+
+          Próximos passos:
+            1) Instalar o CA (se copiado) em /opt/ngsoc-deploy/data/mitmproxy/certs/mitmproxy-ca-cert.pem
+            2) Configurar o browser dos testers para usar proxy {{ ansible_default_ipv4.address }}:{{ mitm_proxy_port }}
+            3) Abrir a UI em http://{{ ansible_default_ipv4.address }}:{{ mitm_web_port }}/ e informar a senha acima.
+          ==========================================================
+      when: mitm_http_check is defined

@@ -1,0 +1,51 @@
+#!/bin/bash
+# install_harbor.sh - Versão Final V4
+# Automatiza a instalação completa do Harbor NGSOC via Ansible Playbook
+
+ANSIBLE_PLAYBOOK="/opt/ngsoc-deploy/Ansible/playbooks/deploy_harbor.yml"
+HARBOR_INSTALLER_DIR="/opt/ngsoc-deploy/data/harbor/installer"
+HARBOR_DOCS_PATH="/opt/ngsoc-deploy/docs/harbor/README.txt"
+
+HARBOR_HOSTNAME="harbor.local"
+HARBOR_HTTPS_PORT="8443"
+HARBOR_ADMIN_USER="admin"
+HARBOR_ADMIN_PASS="Harbor12345"
+
+echo "=========================================================="
+echo "🚀 INÍCIO: Instalação/Provisionamento do Harbor (Ansible)"
+echo "=========================================================="
+
+# 1. Limpeza inicial
+echo "🧹 Limpando repositórios Docker antigos..."
+rm -f /etc/apt/sources.list.d/docker.list /etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list
+rm -f /etc/apt/keyrings/docker.gpg
+
+echo "🔍 Atualizando pacotes APT..."
+sudo apt update -y
+
+# 2. Execução do Playbook
+echo "🔍 Verificando sintaxe do Playbook..."
+ansible-playbook --syntax-check "$ANSIBLE_PLAYBOOK" || { echo "🚨 Sintaxe inválida"; exit 1; }
+
+echo "🚀 Executando Playbook..."
+ansible-playbook "$ANSIBLE_PLAYBOOK" || echo "⚠️ Playbook retornou código de erro, verificando status..."
+
+# 3. Verificação dos containers críticos
+echo "🔍 Verificando status dos containers críticos (nginx, harbor-core)..."
+HARBOR_STATUS=$(cd $HARBOR_INSTALLER_DIR 2>/dev/null && docker compose ps -a | grep -E '(nginx|harbor-core)' | grep -i 'Up ' | wc -l)
+EXPECTED_CRITICAL_CONTAINERS=2
+
+if [ "$HARBOR_STATUS" -lt "$EXPECTED_CRITICAL_CONTAINERS" ]; then
+    echo "🚨 FALHA: Apenas $HARBOR_STATUS de $EXPECTED_CRITICAL_CONTAINERS containers críticos estão rodando."
+    echo "Consulte README: $HARBOR_DOCS_PATH"
+    exit 1
+fi
+
+# 4. Mensagem final de sucesso
+echo "=========================================================="
+echo "✅ HARBOR DEPLOYMENT CONCLUÍDO COM SUCESSO!"
+echo "=========================================================="
+echo "Portal Web: https://${HARBOR_HOSTNAME}:${HARBOR_HTTPS_PORT}"
+echo "Admin: ${HARBOR_ADMIN_USER} / Senha: ${HARBOR_ADMIN_PASS}"
+echo "Documentação: ${HARBOR_DOCS_PATH}"
+echo "=========================================================="

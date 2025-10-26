@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<group name="harbor">
+  <rule id="100001" level="3">
+    <decoded_as>json</decoded_as>
+    <description>Harbor: Proxy access attempt.</description>
+    <options>no_full_log</options>
+  </rule>
+
+  <rule id="100002" level="3">
+    <decoded_as>json</decoded_as>
+    <description>Harbor: Another example event.</description>
+    <options>no_full_log</options>
+  </rule>
+</group>

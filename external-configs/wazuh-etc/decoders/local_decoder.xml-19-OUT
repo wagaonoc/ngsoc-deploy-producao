@@ -1,0 +1,74 @@
+<!-- ========== Harbor Core / JobService / Trivy Decoders ========== -->
+<decoder name="harbor-core-json">
+  <prematch>harbor-core </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="harbor-jobservice-json">
+  <prematch>harbor-jobservice </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="trivy-adapter-json">
+  <prematch>harbor-trivy </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- ========== Metasploit Decoder ========== -->
+<decoder name="metasploit-audit">
+  <prematch>metasploit</prematch>
+  <regex>^[^\s]+\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}\s+[^\s]+\s+metasploit\s+(.*)$</regex>
+  <order>message</order>
+</decoder>
+
+<!-- ========== Mitmproxy Decoders (ajustados) ========== -->
+<decoder name="mitmproxy-audit">
+  <prematch>mitmproxy</prematch>
+  <regex>^[A-Za-z]{3}\s+[0-9]{1,2}\s+[0-9:]{8}\s+[^\s]+\s+mitmproxy\s+(.*)$</regex>
+  <order>message</order>
+</decoder>
+
+<decoder name="mitmproxy-audit-raw">
+  <prematch>MITM-</prematch>
+  <regex>^.*\\[MITM-[A-Z0-9-]+\\].*$</regex>
+  <order>id</order>
+</decoder>
+
+<!-- ========== OWASP ZAP Decoder ========== -->
+<decoder name="zap-audit">
+  <prematch>zap</prematch>
+  <regex>^(.*)$</regex>
+  <order>message</order>
+</decoder>
+
+<!-- ===== Decoder simples e limpo para Wazuh 4.13.1 ===== -->
+ <!-- Genérico (fallback) -->
+<decoder name="trivy-audit">
+  <prematch>trivy</prematch>
+  <regex>^.*trivy.*$</regex>
+  <order>message</order>
+</decoder>
+
+<!-- INFO -->
+
+<decoder name="trivy-info">
+  <prematch>trivy</prematch>
+  <regex>[INFO]</regex>
+  <order>level</order>
+</decoder>
+
+<!-- WARN -->
+
+<decoder name="trivy-warn">
+  <prematch>trivy</prematch>
+  <regex>[WARN]</regex>
+  <order>level</order>
+</decoder>
+
+<!-- ERROR -->
+
+<decoder name="trivy-error">
+  <prematch>trivy</prematch>
+  <regex>[ERROR]</regex>
+  <order>level</order>
+</decoder> 

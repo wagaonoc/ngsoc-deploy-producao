@@ -1,0 +1,165 @@
+---
+- name: Deploy mitmproxy container and export CA to nginx exports
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  vars:
+    mitm_image: "mitmproxy/mitmproxy"
+    mitm_container_name: "ngsoc_mitmproxy"
+    mitm_proxy_port: 8089
+    mitm_web_port: 8090
+
+    # Estrutura padronizada do /opt/ngsoc-deploy
+    mitm_data_dir: "/opt/ngsoc-deploy/data/mitmproxy"
+    mitm_logs_dir: "/opt/ngsoc-deploy/logs/mitmproxy"
+    mitm_certs_dir: "{{ mitm_data_dir }}/certs"
+    mitm_exports_dir: "/opt/ngsoc-deploy/exports/mitmproxy"
+    mitm_reports_dir: "/opt/ngsoc-deploy/reports/mitmproxy"
+
+    mitm_ui_pass: "zap"
+    mitm_wait_timeout: 180
+    mitm_wait_delay: 3
+
+    nginx_export_port: 8085
+    export_filename: "mitmproxy-ca-cert.pem"
+
+  tasks:
+    # ===============================================================
+    # Preparação de diretórios padronizados
+    # ===============================================================
+    - name: Ensure base directories exist for mitmproxy
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0775'
+      loop:
+        - "{{ mitm_data_dir }}"
+        - "{{ mitm_certs_dir }}"
+        - "{{ mitm_logs_dir }}"
+        - "{{ mitm_exports_dir }}"
+        - "{{ mitm_reports_dir }}"
+
+    - name: Ensure logs directory is owned by container user (UID 1000)
+      ansible.builtin.file:
+        path: "{{ mitm_logs_dir }}"
+        owner: 1000
+        group: 1000
+        mode: '0775'
+        recurse: yes
+
+    # ===============================================================
+    # Container Management
+    # ===============================================================
+    - name: Remove existing mitmproxy container if present
+      community.docker.docker_container:
+        name: "{{ mitm_container_name }}"
+        state: absent
+        force_kill: true
+      ignore_errors: true
+
+    - name: Pull mitmproxy image
+      community.docker.docker_image:
+        name: "{{ mitm_image }}"
+        tag: "latest"
+        source: pull
+
+    - name: Run mitmproxy container using logs directory as mount
+      community.docker.docker_container:
+        name: "{{ mitm_container_name }}"
+        image: "{{ mitm_image }}:latest"
+        restart_policy: always
+        published_ports:
+          - "{{ mitm_proxy_port }}:{{ mitm_proxy_port }}"
+          - "{{ mitm_web_port }}:{{ mitm_web_port }}"
+        volumes:
+          - "{{ mitm_logs_dir }}:/home/mitmproxy/.mitmproxy:rw"
+        command:
+          - "mitmweb"
+          - "--listen-host"
+          - "0.0.0.0"
+          - "--listen-port"
+          - "{{ mitm_proxy_port }}"
+          - "--web-host"
+          - "0.0.0.0"
+          - "--web-port"
+          - "{{ mitm_web_port }}"
+          - "--set"
+          - "web_password={{ mitm_ui_pass }}"
+        state: started
+        detach: true
+
+    - name: Wait until mitmproxy container is running
+      ansible.builtin.shell: |
+        docker inspect --format='{{"{{.State.Status}}"}}' {{ mitm_container_name }} 2>/dev/null || echo notfound
+      register: cont_state
+      until: cont_state.stdout.find('running') != -1
+      retries: 30
+      delay: 2
+      failed_when: cont_state.stdout.find('running') == -1
+
+    - name: Pause briefly for mitmproxy initialization
+      ansible.builtin.pause:
+        seconds: 4
+
+    # ===============================================================
+    # Certificado CA (export)
+    # ===============================================================
+    - name: Force generation of mitmproxy CA certificate inside container
+      ansible.builtin.shell: |
+        set -e
+        CONTAINER={{ mitm_container_name }}
+        HOSTIP="{{ ansible_default_ipv4.address }}"
+        docker exec $CONTAINER sh -c "(curl -s --max-time 3 http://mitm.it/ || wget -qO- --timeout=3 http://mitm.it/) >/dev/null 2>&1 || true"
+        docker exec $CONTAINER sh -c "(curl -s --max-time 3 http://$HOSTIP:{{ mitm_web_port }}/ || true)" >/dev/null 2>&1 || true
+      register: ca_force
+      ignore_errors: true
+      changed_when: false
+
+    - name: Wait for mitmproxy CA to appear in logs dir
+      ansible.builtin.wait_for:
+        path: "{{ mitm_logs_dir }}/{{ export_filename }}"
+        state: present
+        timeout: "{{ mitm_wait_timeout }}"
+      register: ca_wait
+      ignore_errors: true
+
+    - name: Copy CA certificate to exports directory (if found)
+      ansible.builtin.copy:
+        src: "{{ mitm_logs_dir }}/{{ export_filename }}"
+        dest: "{{ mitm_exports_dir }}/{{ export_filename }}"
+        owner: root
+        group: root
+        mode: '0644'
+      when: ca_wait is succeeded
+
+    - name: Create README for testers
+      ansible.builtin.copy:
+        dest: "{{ mitm_exports_dir }}/README-testers.txt"
+        content: |
+          NG-SOC - MITMProxy Test Instructions
+          ------------------------------------
+          - CA file: {{ export_filename }}
+          - Download URL:
+            http://{{ ansible_default_ipv4.address }}:{{ nginx_export_port }}/{{ export_filename }}
+          - Proxy host: {{ ansible_default_ipv4.address }}
+          - Proxy port: {{ mitm_proxy_port }}
+          - Mitmweb UI: http://{{ ansible_default_ipv4.address }}:{{ mitm_web_port }}/#/flows
+        mode: '0644'
+
+    # ===============================================================
+    # Summary
+    # ===============================================================
+    - name: Final summary (MITM)
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          MITMProxy DEPLOY SUMMARY
+          ==========================================================
+          Container: {{ mitm_container_name }}
+          Web UI : http://{{ ansible_default_ipv4.address }}:{{ mitm_web_port }}/#/flows
+          Proxy  : {{ ansible_default_ipv4.address }}:{{ mitm_proxy_port }}
+          CA file path (logs): {{ mitm_logs_dir }}/{{ export_filename }}
+          CA exports path   : {{ mitm_exports_dir }}/{{ export_filename }}
+          ==========================================================

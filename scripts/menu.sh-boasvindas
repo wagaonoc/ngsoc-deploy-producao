@@ -1,0 +1,43 @@
+#!/bin/bash
+set -euo pipefail
+
+show_welcome() {
+    WIDTH=90
+    HEIGHT=35
+
+    # ASCII art
+    NGSOC_ASCII=$(figlet -f big "NGSOC")
+    POSITIVOS_ASCII=$(figlet -f small "POSITIVOS+")
+
+    # Função para centralizar cada linha
+    center_text() {
+        local line="$1"
+        local len=${#line}
+        local pad=$(( (WIDTH - len) / 2 ))
+        printf "%*s%s\n" $pad "" "$line"
+    }
+
+    # Centraliza ASCII
+    CENTERED_ASCII=$(echo "$NGSOC_ASCII" | while IFS= read -r line; do center_text "$line"; done)
+    CENTERED_POSITIVOS=$(echo "$POSITIVOS_ASCII" | while IFS= read -r line; do center_text "$line"; done)
+
+    # Mensagem de boas-vindas centralizada
+    WELCOME_MSG="Bem-vindo ao NGSOC - OpenSource SOC\nConfigure e gerencie suas ferramentas de monitoramento e pentest."
+    CENTERED_MSG=$(echo -e "$WELCOME_MSG" | while IFS= read -r line; do center_text "$line"; done)
+
+    # Linhas pontilhadas (corrigido)
+    LINE_LARGE=$(printf '=%.0s' $(seq 1 $WIDTH))
+    LINE_MEDIUM=$(printf -- '-%.0s' $(seq 1 $((WIDTH/2))))
+    LINE_SMALL=$(printf -- '.%.0s' $(seq 1 $((WIDTH/4))))
+
+    # Rodapé à esquerda
+    FOOTER="© 2025 POSITIVOS+. Todos os direitos reservados. Licença: MIT"
+
+    # Junta tudo
+    ASCII_ART="$CENTERED_ASCII\n$CENTERED_POSITIVOS\n$LINE_LARGE\n$CENTERED_MSG\n$LINE_MEDIUM\n$LINE_SMALL\n$FOOTER"
+
+    # Exibe no Whiptail
+    whiptail --title "NGSOC - Bem-vindo" --msgbox "$ASCII_ART" $HEIGHT $WIDTH --ok-button "INICIAR"
+}
+
+show_welcome

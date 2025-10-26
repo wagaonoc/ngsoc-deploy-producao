@@ -1,0 +1,19 @@
+<decoder name="harbor-core-json">
+  <prematch>harbor-core: </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="harbor-jobservice-json">
+  <prematch>harbor-jobservice: </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="harbor-proxy-json">
+  <prematch>harbor-proxy: </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="trivy-adapter-json">
+  <prematch>trivy-adapter: </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>

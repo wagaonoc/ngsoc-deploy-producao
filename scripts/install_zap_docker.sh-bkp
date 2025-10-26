@@ -1,0 +1,23 @@
+# Conteúdo atualizado de /opt/ngsoc-deploy/scripts/install_zap_docker.sh
+#!/bin/bash
+# ----------------------------------------------------
+# SCRIPT DE MENU: Implantação Automatizada do OWASP ZAP
+# ----------------------------------------------------
+PLAYBOOK_FILE="/opt/ngsoc-deploy/Ansible/playbooks/deploy_zap.yml"
+TOOL_NAME="OWASP ZAP"
+
+echo "=========================================================="
+echo "🚀 INÍCIO DA INSTALAÇÃO DE $TOOL_NAME (VIA ANSIBLE)"
+echo "=========================================================="
+
+if ! command -v ansible-playbook &> /dev/null; then
+    echo "❌ ERRO CRÍTICO: Ansible não encontrado. Instale o Ansible (Opção 3)."
+    exit 1
+fi
+# Adiciona a flag -v para modo verbose!
+if sudo ansible-playbook -v "$PLAYBOOK_FILE"; then 
+    echo "✅ EXECUÇÃO CONCLUÍDA. Verifique o status detalhado."
+else
+    echo "❌ ERRO: O Playbook Ansible falhou. Verifique o log."
+    exit 1
+fi

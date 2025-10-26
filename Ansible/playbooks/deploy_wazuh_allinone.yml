@@ -1,0 +1,230 @@
+---
+- name: Deploy Wazuh All-in-One (Ubuntu 22.04 + VirusTotal Integration)
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars:
+    vt_api_key: "{{ lookup('env','VT_API_KEY') | default('REPLACE_ME', true) }}"
+    readme_file: /opt/ngsoc-deploy/docs/wazuh/README.txt
+
+  tasks:
+
+    - name: Ensure directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /opt/ngsoc-deploy/docs/wazuh
+        - /opt/ngsoc-deploy/logs/wazuh
+        - /opt/ngsoc-deploy/scripts
+        - /opt/ngsoc-deploy/Ansible/playbooks
+
+    - name: Add Wazuh APT repo key
+      ansible.builtin.shell: |
+        set -e
+        curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --dearmor -o /usr/share/keyrings/wazuh.gpg
+        echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt stable main" > /etc/apt/sources.list.d/wazuh.list
+
+    - name: Install required packages
+      apt:
+        update_cache: yes
+        name:
+          - wazuh-manager
+          - wazuh-indexer
+          - wazuh-dashboard
+          - jq
+          - curl
+          - openssl
+        state: present
+
+    - name: Stop Wazuh Manager before configuration
+      service:
+        name: wazuh-manager
+        state: stopped
+
+    - name: Deploy ossec.conf (VirusTotal integration included)
+      copy:
+        dest: /var/ossec/etc/ossec.conf
+        owner: root
+        group: wazuh
+        mode: '0640'
+        content: |
+          <ossec_config>
+            <global>
+              <jsonout_output>yes</jsonout_output>
+              <alerts_log>yes</alerts_log>
+              <logall>no</logall>
+              <email_notification>no</email_notification>
+            </global>
+
+            <alerts>
+              <log_alert_level>1</log_alert_level>
+            </alerts>
+
+            <integration>
+              <name>virustotal</name>
+              <api_key>{{ vt_api_key }}</api_key>
+              <group>syscheck,syscheck_file,syscheck_entry_added</group>
+              <alert_format>json</alert_format>
+            </integration>
+
+            <localfile>
+              <location>/var/ossec/logs/integrations.log</location>
+              <log_format>syslog</log_format>
+            </localfile>
+
+            <ruleset>
+              <decoder_dir>etc/decoders</decoder_dir>
+              <decoder_dir>ruleset/decoders</decoder_dir>
+              <rule_dir>etc/rules</rule_dir>
+              <rule_dir>ruleset/rules</rule_dir>
+            </ruleset>
+          </ossec_config>
+
+    - name: Deploy local_rules.xml
+      copy:
+        dest: /var/ossec/etc/rules/local_rules.xml
+        owner: wazuh
+        group: wazuh
+        mode: '0640'
+        content: |
+          <group name="local">
+            <rule id="100500" level="8">
+              <decoded_as>virustotal-detection</decoded_as>
+              <description>VirusTotal: hash $(sha256) detectado por $(detections)/$(total) mecanismos</description>
+              <group>local,virustotal,malware</group>
+            </rule>
+            <rule id="100501" level="4">
+              <decoded_as>virustotal-warning</decoded_as>
+              <description>VirusTotal: hash $(sha256) não encontrado ou limite da API atingido</description>
+              <group>local,virustotal,info</group>
+            </rule>
+          </group>
+
+    - name: Deploy local_decoder.xml
+      copy:
+        dest: /var/ossec/etc/decoders/local_decoder.xml
+        owner: wazuh
+        group: wazuh
+        mode: '0640'
+        content: |
+          <decoder name="virustotal-detection">
+            <prematch>detected by</prematch>
+            <regex>^[^a-zA-Z0-9]*([a-fA-F0-9]{64}) detected by ([0-9]+) / ([0-9]+) engines$</regex>
+            <order>sha256 detections total</order>
+          </decoder>
+
+          <decoder name="virustotal-warning">
+            <prematch>not found on VirusTotal</prematch>
+            <regex>^[^a-zA-Z0-9]*([a-fA-F0-9]{64}) not found on VirusTotal or API limit reached$</regex>
+            <order>sha256</order>
+          </decoder>
+
+    - name: Deploy VirusTotal integration script
+      copy:
+        dest: /var/ossec/integrations/virustotal.py
+        owner: root
+        group: wazuh
+        mode: '0750'
+        content: |
+          #!/usr/bin/env python3
+          import json, sys, requests
+          VT_API_KEY = "{{ vt_api_key }}"
+          VT_URL = "https://www.virustotal.com/api/v3/files/{}"
+          def vt_check(sha256):
+              headers = {"x-apikey": VT_API_KEY}
+              r = requests.get(VT_URL.format(sha256), headers=headers)
+              if r.status_code == 200:
+                  data = r.json()
+                  det = data["data"]["attributes"]["last_analysis_stats"]
+                  print(f"✅ {sha256} detected by {det['malicious']} / {sum(det.values())} engines")
+              else:
+                  print(f"⚠️ {sha256} not found on VirusTotal or API limit reached")
+          if __name__ == "__main__":
+              log = json.load(sys.stdin)
+              sha256 = log.get("data", {}).get("sha256")
+              if sha256:
+                  vt_check(sha256)
+
+    - name: Fix permissions
+      file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.group }}"
+        mode: "{{ item.mode }}"
+      loop:
+        - { path: '/var/ossec/etc/shared', owner: 'wazuh', group: 'wazuh', mode: '0750' }
+        - { path: '/var/ossec/logs', owner: 'wazuh', group: 'wazuh', mode: '0750' }
+        - { path: '/var/ossec/queue', owner: 'wazuh', group: 'wazuh', mode: '0750' }
+
+    - name: Validate Wazuh configuration
+      command: /var/ossec/bin/wazuh-analysisd -t
+
+    - name: Enable and restart Wazuh stack
+      service:
+        name: wazuh-indexer
+        enabled: yes
+        state: restarted
+    - service:
+        name: wazuh-manager
+        enabled: yes
+        state: restarted
+    - service:
+        name: wazuh-dashboard
+        enabled: yes
+        state: restarted
+
+    - name: Set random dashboard admin password
+      vars:
+        dash_pass: "{{ lookup('password', '/dev/null length=18 chars=ascii_letters,digits') }}"
+      block:
+        - name: Set admin password
+          command: >
+            /usr/share/wazuh-dashboard/bin/wazuh-passwords-tool --user admin --password {{ dash_pass }}
+          register: pass_out
+          failed_when: false
+
+        - name: Generate README
+          copy:
+            dest: "{{ readme_file }}"
+            mode: '0644'
+            content: |
+              ==========================================================
+              NG-SOC - Wazuh (All-in-One) - Deployment Summary
+              ==========================================================
+              Dashboard URL : https://{{ ansible_default_ipv4.address }}:5601
+              Dashboard User: admin
+              Dashboard Pass: {{ dash_pass }}
+              ----------------------------------------------------------
+              Services and Ports:
+              - wazuh-manager   : 1514 (agents), 55000 (API)
+              - wazuh-indexer   : 9200, 9300
+              - wazuh-dashboard : 5601
+              ----------------------------------------------------------
+              Integration:
+              - VirusTotal: Enabled
+              - API Key: {{ vt_api_key }}
+              - Script: /var/ossec/integrations/virustotal.py
+              - Log: /var/ossec/logs/integrations.log
+              ----------------------------------------------------------
+              Key Config Files:
+              - /var/ossec/etc/ossec.conf
+              - /var/ossec/etc/rules/local_rules.xml
+              - /var/ossec/etc/decoders/local_decoder.xml
+              ----------------------------------------------------------
+              Test VirusTotal:
+                echo -n "X5O!P%@AP[4\\PZX54(P^)7CC)7}\\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\\$H+H*" | sudo tee /usr/local/bin/eicar_vt.txt >/dev/null
+                sudo chmod 644 /usr/local/bin/eicar_vt.txt
+                tail -f /var/ossec/logs/integrations.log
+              ==========================================================
+              Config saved at: {{ readme_file }}
+
+    - name: Deployment Summary
+      debug:
+        msg: |
+          ✅ Wazuh All-in-One + VirusTotal implantado com sucesso!
+          🔹 Dashboard: https://{{ ansible_default_ipv4.address }}:5601
+          🔹 README: {{ readme_file }}

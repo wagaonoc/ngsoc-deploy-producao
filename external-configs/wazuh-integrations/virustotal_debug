@@ -1,0 +1,10 @@
+#!/bin/bash
+# --- VIRUSTOTAL DEBUG WRAPPER ---
+LOGFILE="/var/ossec/logs/integrations_debug.log"
+
+echo "=== $(date) ===" >> "$LOGFILE"
+echo "ARGS: \$1=$1 \$2=$2 \$3=$3 \$4=$4" >> "$LOGFILE"
+echo "STDIN CONTENT:" >> "$LOGFILE"
+cat - >> "$LOGFILE"
+echo "--- END STDIN ---" >> "$LOGFILE"
+exit 0

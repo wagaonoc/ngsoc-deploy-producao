@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# install_metasploit.sh - wrapper (Ansible) - non-interactive installer
+set -euo pipefail
+IFS=$'\n\t'
+
+ANSIBLE_PLAYBOOK="/opt/ngsoc-deploy/Ansible/playbooks/deploy_metasploit.yml"
+CREDS_FILE="/opt/ngsoc-deploy/docs/metasploit/credentials.txt"
+DOC_README="/opt/ngsoc-deploy/docs/metasploit/README.txt"
+
+# Options: --password/-p and --image/-i
+MSF_DB_PASSWORD="${MSF_DB_PASSWORD:-}"
+MSF_IMAGE_OVERRIDE="${MSF_IMAGE_OVERRIDE:-}"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --password|-p)
+      MSF_DB_PASSWORD="$2"; shift 2;;
+    --image|-i)
+      MSF_IMAGE_OVERRIDE="$2"; shift 2;;
+    --help|-h)
+      echo "Usage: $0 [--password PASSWORD] [--image IMAGE]" ; exit 0;;
+    *)
+      echo "Unknown arg: $1"; shift;;
+  esac
+done
+
+echo "=========================================================="
+echo "🚀 INÍCIO: Instalação/Provisionamento do Metasploit (Ansible)"
+echo "=========================================================="
+
+# quick check
+if ! command -v ansible-playbook >/dev/null 2>&1; then
+  echo "ERRO: 'ansible-playbook' não encontrado no PATH. Instale Ansible no controlador."
+  exit 1
+fi
+
+echo "🔍 Verificando sintaxe do Playbook..."
+ansible-playbook --syntax-check "$ANSIBLE_PLAYBOOK" || { echo "🚨 Playbook syntax invalid"; exit 1; }
+
+# Generate password if not provided
+if [ -z "${MSF_DB_PASSWORD:-}" ]; then
+  if command -v openssl >/dev/null 2>&1; then
+    MSF_DB_PASSWORD="$(openssl rand -base64 48 2>/dev/null | tr -dc 'A-Za-z0-9@%_+=!#-' | cut -c1-32)"
+  else
+    MSF_DB_PASSWORD="$(tr -dc 'A-Za-z0-9@%_+=!#-' < /dev/urandom | head -c 32)"
+  fi
+  if [ -z "${MSF_DB_PASSWORD:-}" ]; then
+    MSF_DB_PASSWORD="$(head -c 48 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
+  fi
+  GENERATED_PASSWORD=yes
+else
+  GENERATED_PASSWORD=no
+fi
+
+# Build extra-vars string
+EXTRA_VARS="msf_db_password=${MSF_DB_PASSWORD}"
+if [ -n "${MSF_IMAGE_OVERRIDE:-}" ]; then
+  EXTRA_VARS="${EXTRA_VARS} metasploit_image=${MSF_IMAGE_OVERRIDE}"
+fi
+
+echo "🔐 Executando playbook (passando senha e vars)..."
+ansible-playbook "$ANSIBLE_PLAYBOOK" --extra-vars "${EXTRA_VARS}" || {
+  echo "⚠️ AVISO: O Playbook retornou código não-zero. Verifique logs do Ansible."
+  # continue to post-checks
+}
+
+echo "🔍 Verificando o status dos containers do Metasploit..."
+docker ps --filter "name=msf-db" --filter "name=metasploit" --format '{{.Names}} {{.Status}}' || true
+
+# Check credentials file
+if [ -f "${CREDS_FILE}" ]; then
+  CREDS_PERM=$(stat -c "%a" "${CREDS_FILE}")
+  echo "=========================================================="
+  echo "✅ METASPLOIT DEPLOYMENT CONCLUÍDO COM SUCESSO!"
+  echo "=========================================================="
+  echo "Detalhes de Acesso Rápido:"
+  echo ""
+  echo "  🌐 Console Metasploit (terminal):"
+  echo "    - Comando: docker exec -it metasploit msfconsole"
+  echo ""
+  echo "  🔒 Credenciais gravadas em (apenas root pode ler):"
+  echo "    - Path: ${CREDS_FILE}"
+  echo "    - Permissões: ${CREDS_PERM} (deve ser 600)"
+  if [ "${GENERATED_PASSWORD:-no}" = "yes" ]; then
+    echo ""
+    echo "  ⚠️ A senha foi GERADA automaticamente e gravada no arquivo de credenciais."
+  fi
+  echo ""
+  echo "  📄 README com instruções (sem senha):"
+  echo "    - Path: ${DOC_README}"
+  echo "----------------------------------------------------------"
+else
+  echo "=========================================================="
+  echo "⚠️ AVISO: Deploy finalizado, mas o arquivo de credenciais não foi encontrado em ${CREDS_FILE}"
+  echo "Verifique o playbook e logs do Ansible."
+  echo "=========================================================="
+  exit 1
+fi
+
+exit 0

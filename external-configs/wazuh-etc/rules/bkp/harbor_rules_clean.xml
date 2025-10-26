@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<group name="harbor">
+
+  <!-- HARBOR CORE - Falhas de autenticação -->
+  <rule id="100001" level="7">
+    <decoded_as>json</decoded_as>
+    <description>HARBOR CORE - Falha de login (401/403) para o usuário $1</description>
+    <regex>harbor-core: .*?"status":(401|403).*?"user":"([a-zA-Z0-9_]+)"</regex>
+    <group>harbor,authentication_failed</group>
+  </rule>
+
+  <!-- HARBOR JOBSERVICE - Falhas de autenticação -->
+  <rule id="100002" level="7">
+    <decoded_as>json</decoded_as>
+    <description>HARBOR JOBSERVICE - Falha de login (401/403) para o usuário $1</description>
+    <regex>harbor-jobservice: .*?"status":(401|403).*?"user":"([a-zA-Z0-9_]+)"</regex>
+    <group>harbor,authentication_failed</group>
+  </rule>
+
+  <!-- TRIVY - Falhas de autenticação -->
+  <rule id="100003" level="7">
+    <regex>trivy-adapter:.*?401.*?"user":"([a-zA-Z0-9_]+)"</regex>
+    <description>TRIVY - Falha de login (401) no container trivy-adapter para o usuário $1.</description>
+    <group>trivy,authentication_failed</group>
+  </rule>
+
+</group>

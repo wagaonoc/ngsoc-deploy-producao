@@ -1,0 +1,190 @@
+---
+# file: /opt/ngsoc-deploy/Ansible/playbooks/deploy_zap.yml
+- name: 6. Deploy and validate OWASP ZAP container
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+  vars:
+    tool_name: "zap"
+    tool_friendly_name: "OWASP ZAP"
+    zap_version: "2.14.0"
+    zap_image: "ghcr.io/zaproxy/zaproxy"
+    zap_tag: "{{ zap_version }}"
+    zap_container_name: "ngsoc_{{ tool_name }}"
+    zap_port: 8080
+    zap_user_id: 1000
+    zap_data_dir: "/opt/ngsoc-deploy/data/{{ tool_name }}"
+    zap_log_dir: "/opt/ngsoc-deploy/logs/{{ tool_name }}"
+    zap_log_file_path: "{{ zap_data_dir }}/home/zap.log"
+    zap_api_wait_timeout_seconds: 300
+    zap_api_wait_delay: 5
+
+  tasks:
+    - name: 6.1. Ensure ZAP data and log directories exist (Estrutura NGSOC)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+      loop:
+        - "{{ zap_data_dir }}"
+        - "{{ zap_log_dir }}"
+
+    - name: 6.2. Ensure ZAP home dir exists and fix ownership (UID/GID 1000)
+      ansible.builtin.file:
+        path: "{{ zap_data_dir }}/home"
+        state: directory
+        owner: "{{ zap_user_id }}"
+        group: "{{ zap_user_id }}"
+        mode: '0755'
+
+    - name: 6.3. Remove any existing container with same name (Idempotência)
+      community.docker.docker_container:
+        name: "{{ zap_container_name }}"
+        state: absent
+        force_kill: true
+      ignore_errors: true
+
+    - name: 6.4. Pull ZAP image (v{{ zap_version }})
+      community.docker.docker_image:
+        name: "{{ zap_image }}"
+        tag: "{{ zap_tag }}"
+        source: pull
+
+    - name: 6.5. Run ZAP container (daemon) with API open and persistent volumes
+      community.docker.docker_container:
+        name: "{{ zap_container_name }}"
+        image: "{{ zap_image }}:{{ zap_tag }}"
+        restart_policy: always
+        published_ports:
+          - "{{ zap_port }}:{{ zap_port }}"
+        volumes:
+          - "{{ zap_data_dir }}/home:/home/zap/.ZAP:rw"
+        env:
+          ZAP_PORT: "{{ zap_port | string }}"
+        command:
+          - "zap.sh"
+          - "-daemon"
+          - "-host"
+          - "0.0.0.0"
+          - "-port"
+          - "{{ zap_port }}"
+          - "-config"
+          - "api.disablekey=true"
+          - "-config"
+          - "api.addrs.addr.name=.*"
+          - "-config"
+          - "api.addrs.addr.regex=true"
+        state: started
+        detach: true
+
+    - name: 6.6. Validando e Aguardando API ZAP (espera)
+      ansible.builtin.shell: |
+        ZAP_URL="http://127.0.0.1:{{ zap_port }}/JSON/core/view/version/"
+        MAX_TIME={{ zap_api_wait_timeout_seconds }}
+        RETRY_DELAY={{ zap_api_wait_delay }}
+        END_TIME=$(( $(date +%s) + $MAX_TIME ))
+        while [ $(date +%s) -lt $END_TIME ]; do
+            if curl -s -o /dev/null -w "%{http_code}" $ZAP_URL | grep -q 200; then
+                exit 0
+            fi
+            sleep $RETRY_DELAY
+        done
+        exit 1
+      register: zap_api_shell_check
+      changed_when: false
+      ignore_errors: false
+      no_log: true
+
+    - name: 6.7. Display ZAP success and validation instructions (Teste de Log Final)
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ zap_port }}/JSON/core/view/version/"
+        method: GET
+        return_content: yes
+        status_code: 200
+      register: zap_version_check
+      ignore_errors: true
+
+    - name: "📄 Gerar README para OWASP ZAP (operacao)"
+      ansible.builtin.copy:
+        dest: "/opt/ngsoc-deploy/docs/zap/README.txt"
+        mode: '0644'
+        owner: root
+        group: root
+        content: |
+          ==========================================================
+          NG-SOC - OWASP ZAP (Zed Attack Proxy) v{{ zap_version }}
+          ==========================================================
+
+          🌐 PORTAL WEB / INTERFACE
+
+          - URL: http://{{ ansible_default_ipv4.address }}:{{ zap_port }}
+          - Interface: API HTTP (modo daemon)
+          - O container executa a API aberta para integração.
+
+          📦 CONTAINER
+
+          | Serviço | Imagem | Porta | Função |
+          | :--- | :--- | :--- | :--- |
+          | **ngsoc_zap** | {{ zap_image }}:{{ zap_tag }} | {{ zap_port }} | Proxy e motor de varredura HTTP/HTTPS |
+
+          📁 ESTRUTURA DE DIRETÓRIOS
+
+          - /opt/ngsoc-deploy/data/zap/home  : persistência do ZAP (.ZAP)
+          - /opt/ngsoc-deploy/logs/zap       : logs do container (via rsyslog)
+          - /opt/ngsoc-deploy/reports/zap    : relatórios exportados (SARIF/JSON/HTML)
+          - /opt/ngsoc-deploy/docs/zap       : documentação do componente
+          - /opt/ngsoc-deploy/exports/zap    : artefatos/exports (se aplicável)
+
+          🧠 DETALHES TÉCNICOS
+
+          - Porta API padrão:  {{ zap_port }}
+          - API key: desativada (--config api.disablekey=true)
+          - Origens: permitido (api.addrs.addr.regex=true)
+
+          🐳 OPERAÇÕES COM DOCKER (Resumido)
+
+          - Ver status:
+            docker ps | grep ngsoc_zap
+          - Logs em tempo real:
+            docker logs -f ngsoc_zap
+          - Reiniciar:
+            docker restart ngsoc_zap
+          - Parar:
+            docker stop ngsoc_zap
+
+          🔧 TROUBLESHOOTING RÁPIDO
+
+          1. Teste API local:
+             curl http://127.0.0.1:{{ zap_port }}/JSON/core/view/version/
+          2. Conferir logs:
+             tail -f /opt/ngsoc-deploy/logs/zap/zap.log
+          3. Se não subir:
+             - verificar Docker ativo (systemctl status docker)
+             - permissões em /opt/ngsoc-deploy/data/zap/home
+
+          ⚠️ NOTAS
+
+          - Container roda em modo daemon sem GUI nativa. Use zap-cli / APIs para operar.
+          - Relatórios: /opt/ngsoc-deploy/reports/zap/
+          - Ajuste IP/porta em caso de instalação em outro servidor.
+
+          📚 REFERÊNCIAS
+          - https://www.zaproxy.org
+          - https://www.zaproxy.org/docs/api/
+
+    - name: 6.8. Mostrar Status Final
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          ✅ ZAP DEPLOYED AND VALIDADO! (v{{ zap_version }} estável)
+          ==========================================================
+          TOOL: {{ tool_friendly_name }}
+          Container : {{ zap_container_name }}
+          API Port  : {{ zap_port }}
+          ➡️ Status API: {{ (zap_version_check.content | default('N/A')) | regex_replace('\\s+', ' ') }}
+          PRÓXIMOS PASSOS PARA VALIDAÇÃO FINAL:
+            - sudo tail -f {{ zap_log_file_path }}
+            - Testar API acima (curl)

@@ -1,0 +1,32 @@
+#!/bin/bash
+set -e
+
+PLAYBOOK_FILE="/opt/ngsoc-deploy/Ansible/playbooks/deploy_trivy.yml"
+
+echo "=========================================================="
+echo "🚀 INÍCIO: Instalação/Provisionamento do Trivy (Ansible)"
+echo "=========================================================="
+
+# Verificar sintaxe do Playbook
+echo "🔍 Verificando sintaxe do Playbook..."
+if ! ansible-playbook "$PLAYBOOK_FILE" --syntax-check; then
+    echo "❌ ERRO: Sintaxe do Playbook inválida."
+    exit 1
+fi
+echo "✅ Sintaxe do Playbook OK."
+
+# Executar Playbook
+echo "⚙️  Executando Playbook..."
+if ansible-playbook "$PLAYBOOK_FILE"; then
+    echo "=========================================================="
+    echo "✅ TRIVY: Playbook executado com sucesso!"
+    echo "=========================================================="
+    echo "📌 DETALHES COMPLETOS: /opt/ngsoc-deploy/docs/trivy/README.txt"
+    echo ""
+    echo "📌 Teste de Cliente RPC (exemplo):"
+    echo "   docker exec -it ngsoc_trivy sh -c \"TRIVY_SERVER='http://localhost:4954' trivy image alpine:latest\""
+    echo "=========================================================="
+else
+    echo "❌ ERRO: Falha na execução do Playbook."
+    exit 1
+fi

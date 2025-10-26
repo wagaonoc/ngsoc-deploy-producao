@@ -1,0 +1,40 @@
+#!/bin/bash
+# --- Wazuh-VirusTotal Integration (final version) ---
+# Receives: virustotal <alert_json_file> <api_key>
+
+ALERT_FILE="$1"
+API_KEY="$2"
+LOGFILE="/var/ossec/logs/integrations.log"
+
+PYTHON="/var/ossec/framework/python/bin/python3"
+[ ! -x "$PYTHON" ] && PYTHON="/usr/bin/python3"
+
+if [ ! -f "$ALERT_FILE" ]; then
+  echo "[VT] Alert file not found: $ALERT_FILE" >> "$LOGFILE"
+  exit 1
+fi
+
+# Extrai o hash SHA256 do alerta Syscheck
+HASH=$(grep -m1 -oP '"sha256_after":"\K[0-9a-f]{64}' "$ALERT_FILE")
+if [ -z "$HASH" ]; then
+  echo "[VT] No hash found in alert $ALERT_FILE" >> "$LOGFILE"
+  exit 0
+fi
+
+# Consulta o VirusTotal (API v3)
+RESPONSE=$(curl -s --request GET \
+  --url "https://www.virustotal.com/api/v3/files/$HASH" \
+  --header "x-apikey: $API_KEY")
+
+# Lê o número de engines que detectaram
+DETECTIONS=$(echo "$RESPONSE" | grep -oP '"malicious":\s*\K[0-9]+' | paste -sd+ | bc 2>/dev/null)
+TOTAL=$(echo "$RESPONSE" | grep -o '"engine_name"' | wc -l)
+
+# Grava no log de integração
+if [ "$TOTAL" -gt 0 ]; then
+  echo "✅ $HASH detected by $DETECTIONS / $TOTAL engines" >> "$LOGFILE"
+else
+  echo "⚠️ $HASH not found on VirusTotal or API limit reached" >> "$LOGFILE"
+fi
+
+exit 0

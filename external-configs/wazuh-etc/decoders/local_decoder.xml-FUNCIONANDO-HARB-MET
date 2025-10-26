@@ -1,0 +1,40 @@
+<!-- Minimal local decoders for Harbor / Metasploit / Mitmproxy / Trivy -->
+<!-- POSIX regex; avoid stray shell output inside the XML -->
+
+<decoder name="harbor-core-json">
+  <prematch>harbor-core </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="harbor-jobservice-json">
+  <prematch>harbor-jobservice </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="trivy-adapter-json">
+  <prematch>harbor-trivy </prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="metasploit-audit">
+  <prematch>metasploit</prematch>
+  <regex>^[^\s]+\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}\s+[^\s]+\s+metasploit\s+(.*)$</regex>
+  <order>message</order>
+</decoder>
+
+<decoder name="mitmproxy-json">
+  <prematch>mitmproxy {</prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<decoder name="mitmproxy-audit">
+  <prematch>mitmproxy</prematch>
+  <regex>^[^\s]+\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}\s+[^\s]+\s+mitmproxy\s+(.*)$</regex>
+  <order>message</order>
+</decoder>
+
+<decoder name="mitmproxy-audit-raw">
+  <prematch>MITM</prematch>
+  <regex>^.*(MITM-[A-Z0-9-]+)\s*(.*)$</regex>
+  <order>id,message</order>
+</decoder>

@@ -1,0 +1,130 @@
+---
+- name: Deploy Greenbone Community Edition (All-in-One)
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+
+  vars:
+    # Diretórios e rede
+    ngsoc_dir: /opt/ngsoc-deploy
+    openvas_data_dir: "{{ ngsoc_dir }}/data/openvas"
+    openvas_network: ngsoc_net
+    gsa_host_port: 9392
+    openvas_version_tag: "stable"
+
+    # Credenciais do GSA (Interface Web)
+    gvm_admin_user: "gvmadmin"
+    gvm_admin_password: "Senha@Forte123"
+
+  tasks:
+    ####################################################################
+    # 1. Garantir estrutura de diretórios (mantém todos os feeds atuais)
+    ####################################################################
+    - name: Ensure OpenVAS directories exist
+      ansible.builtin.file:
+        path: "{{ openvas_data_dir }}/{{ item }}"
+        state: directory
+        owner: 1000
+        group: 1000
+        mode: "0755"
+      loop:
+        - feed-data/plugins
+        - feed-data/scap-data
+        - feed-data/cert-data
+        - feed-data/notus-data
+        - feed-data/notus-data/advisories
+        - psql-data
+        - logs/openvas
+
+    ####################################################################
+    # 2. Garantir rede Docker
+    ####################################################################
+    - name: Ensure Docker network exists
+      community.docker.docker_network:
+        name: "{{ openvas_network }}"
+        state: present
+
+    ####################################################################
+    # 3. Limpar contêineres antigos (modulares)
+    ####################################################################
+    - name: Remove old modular containers
+      community.docker.docker_container:
+        name: "{{ item }}"
+        state: absent
+      ignore_errors: yes
+      loop:
+        - greenbone-community-edition-gsa-1
+        - greenbone-community-edition-gvmd-1
+        - greenbone-community-edition-openvas-scanner-1
+        - greenbone-community-edition-ospd-openvas-1
+        - greenbone-community-edition-redis-server-1
+        - greenbone-community-edition-pg-gvm-1
+        - greenbone-community-edition-all-in-one
+
+    ####################################################################
+    # 4. Ajustar permissões locais
+    ####################################################################
+    - name: Fix permissions for GVM user (UID 1000)
+      ansible.builtin.file:
+        path: "{{ openvas_data_dir }}"
+        state: directory
+        recurse: yes
+        owner: 1000
+        group: 1000
+
+    ####################################################################
+    # 5. Deploy do contêiner All-in-One (GVM + Scanner + Redis + DB)
+    ####################################################################
+    - name: Deploy Greenbone Community Edition (All-in-One)
+      community.docker.docker_container:
+        name: greenbone-community-edition-all-in-one
+        image: greenbone/openvas:{{ openvas_version_tag }}
+        state: started
+        restart_policy: always
+        privileged: true
+        networks:
+          - name: "{{ openvas_network }}"
+        published_ports:
+          - "{{ gsa_host_port }}:9392"
+
+        volumes:
+          - "{{ openvas_data_dir }}/psql-data:/var/lib/postgresql/data:rw"
+          - "{{ openvas_data_dir }}/feed-data/plugins:/var/lib/openvas/plugins:rw"
+          - "{{ openvas_data_dir }}/feed-data/scap-data:/var/lib/openvas/scap-data:rw"
+          - "{{ openvas_data_dir }}/feed-data/cert-data:/var/lib/openvas/cert-data:rw"
+          - "{{ openvas_data_dir }}/feed-data/notus-data:/var/lib/notus:rw"
+          - "{{ openvas_data_dir }}/logs/openvas:/var/log/gvm:rw"
+
+        env:
+          CONTAINER_ADMIN_USER: "{{ gvm_admin_user }}"
+          CONTAINER_ADMIN_PASSWORD: "{{ gvm_admin_password }}"
+          TZ: "America/Sao_Paulo"
+
+    ####################################################################
+    # 6. Verificar inicialização
+    ####################################################################
+    - name: Wait for GSA (web interface) to become available
+      ansible.builtin.uri:
+        url: "https://localhost:{{ gsa_host_port }}"
+        method: GET
+        validate_certs: no
+        timeout: 120
+      register: gsa_status
+      retries: 12
+      delay: 10
+      until: gsa_status.status == 200
+      ignore_errors: yes
+
+    ####################################################################
+    # 7. Exibir instruções de acesso
+    ####################################################################
+    - name: Display GSA Web UI Access
+      ansible.builtin.debug:
+        msg: |
+          ✅ Greenbone Community Edition (All-in-One) foi implantado com sucesso!
+          🌐 Acesse a interface web (GSA):
+          URL: https://<SEU_IP>:{{ gsa_host_port }}
+          Usuário: {{ gvm_admin_user }}
+          Senha: {{ gvm_admin_password }}
+          📁 Dados e feeds preservados em: {{ openvas_data_dir }}
+

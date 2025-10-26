@@ -1,0 +1,12 @@
+<!-- mitmproxy decoders (local, isolated) -->
+<decoder name="mitmproxy-json">
+  <prematch>mitmproxy {</prematch>
+  <plugin_decoder>JSON_Decoder</plugin_decoder>
+</decoder>
+
+<!-- textual fallback: captura MITM-XXXX e o resto da mensagem -->
+<decoder name="mitmproxy-audit">
+  <prematch>mitmproxy</prematch>
+  <regex>^.*(MITM-[A-Z0-9-]+)[[:space:]]*(.*)$</regex>
+  <order>id,message</order>
+</decoder>
