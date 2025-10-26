@@ -43,14 +43,13 @@ fi
 # =========================
 msg "📦 Instalando Wazuh (manager, indexer, dashboard) e dependências..."
 apt-get update -y
-# Repo oficial (ajuste se já tiver configurado):
 curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --dearmor -o /usr/share/keyrings/wazuh.gpg
 echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt stable main" > /etc/apt/sources.list.d/wazuh.list
 apt-get update -y
 
 # Pacotes principais
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  wazuh-manager wazuh-indexer wazuh-dashboard jq curl openssl
+  wazuh-manager wazuh-indexer wazuh-dashboard jq curl openssl ansible
 
 # =========================
 # PARAR SERVIÇOS PARA CONFIGURAR
@@ -253,343 +252,21 @@ else
 fi
 
 # =========================
-# CONFIG: local_rules.xml
-# =========================
-msg "📝 Gravando ${LOCAL_RULES}..."
-cat > "$LOCAL_RULES" <<"EOF"
-<!-- ========== Harbor Rules ========== -->
-<group name="harbor-rules">
-  <rule id="100900" level="7">
-    <decoded_as>harbor-core-json</decoded_as>
-    <description>Harbor core: falha de autenticação (401)</description>
-    <regex field="status">401</regex>
-  </rule>
-  <rule id="100901" level="8">
-    <decoded_as>harbor-core-json</decoded_as>
-    <description>Harbor core: acesso proibido (403)</description>
-    <regex field="status">403</regex>
-  </rule>
-  <rule id="100902" level="10">
-    <decoded_as>harbor-core-json</decoded_as>
-    <description>Harbor core: erro interno (500)</description>
-    <regex field="status">500</regex>
-  </rule>
-  <rule id="100903" level="10">
-    <decoded_as>harbor-core-json</decoded_as>
-    <regex field="method">DELETE</regex>
-    <description>ALERTA CRÍTICO: Artefato/Imagem DELETADO(A) do Harbor - Usuário: $(operator)</description>
-  </rule>
-  <rule id="100910" level="0">
-    <decoded_as>harbor-jobservice-json</decoded_as>
-    <description>Harbor jobservice: status 200</description>
-    <regex field="status">200</regex>
-  </rule>
-  <rule id="100911" level="7">
-    <decoded_as>harbor-jobservice-json</decoded_as>
-    <description>Harbor jobservice: erro</description>
-    <regex field="status">[^2]..\d</regex>
-  </rule>
-  <rule id="100920" level="5">
-    <decoded_as>trivy-adapter-json</decoded_as>
-    <description>Harbor Trivy: status 200</description>
-    <regex field="status">200</regex>
-  </rule>
-  <rule id="100921" level="7">
-    <decoded_as>trivy-adapter-json</decoded_as>
-    <description>Harbor Trivy: erro</description>
-    <regex field="status">[^2]..\d</regex>
-  </rule>
-</group>
-
-<!-- ========== Metasploit Rules ========== -->
-<group name="metasploit-rules">
-  <rule id="101000" level="5">
-    <decoded_as>metasploit-audit</decoded_as>
-    <description>Metasploit: evento detectado</description>
-  </rule>
-  <rule id="101001" level="7">
-    <decoded_as>metasploit-audit</decoded_as>
-    <match>Spooling to file</match>
-    <description>Metasploit: início de sessão de console / spool de saída</description>
-  </rule>
-  <rule id="101002" level="10">
-    <decoded_as>metasploit-audit</decoded_as>
-    <match>Meterpreter session opened</match>
-    <description>Metasploit: sessão Meterpreter aberta</description>
-  </rule>
-  <rule id="101003" level="5">
-    <decoded_as>metasploit-audit</decoded_as>
-    <match>Meterpreter session closed</match>
-    <description>Metasploit: sessão Meterpreter finalizada</description>
-  </rule>
-  <rule id="101004" level="10">
-    <decoded_as>metasploit-audit</decoded_as>
-    <match>Exploit completed, result: success</match>
-    <description>Metasploit: exploit completado com sucesso</description>
-  </rule>
-  <rule id="101005" level="8">
-    <decoded_as>metasploit-audit</decoded_as>
-    <match>(Uploading:|Wrote:|Saved payload to)</match>
-    <description>Metasploit: upload ou gravação de payload detectado</description>
-  </rule>
-</group>
-
-<!-- Mitmproxy -->
-<group name="mitmproxy-rules">
-  <rule id="101100" level="7">
-    <decoded_as>mitmproxy-audit</decoded_as>
-    <description>Mitmproxy: teste REAL detectado (marca MITM-WAZUH-REAL)</description>
-  </rule>
-</group>
-
-<!-- ========== OWASP ZAP ========== -->
-<group name="zap-rules">
-  <rule id="110300" level="5">
-    <decoded_as>zap-audit</decoded_as>
-    <description>OWASP ZAP: evento detectado no log</description>
-  </rule>
-  <rule id="110301" level="10">
-    <decoded_as>zap-audit</decoded_as>
-    <match>ERROR</match>
-    <description>OWASP ZAP: erro detectado no log</description>
-  </rule>
-</group>
-
-<!-- ========== Trivy ========== -->
-<group name="trivy-rules">
-  <rule id="120100" level="5">
-    <decoded_as>trivy-audit</decoded_as>
-    <match>[INFO]</match>
-    <description>Trivy: scan informativo</description>
-  </rule>
-  <rule id="120101" level="7">
-    <decoded_as>trivy-audit</decoded_as>
-    <match>[WARN]</match>
-    <description>Trivy: vulnerabilidade detectada</description>
-  </rule>
-  <rule id="120102" level="10">
-    <decoded_as>trivy-audit</decoded_as>
-    <match>[ERROR]</match>
-    <description>Trivy: erro crítico no motor de scan</description>
-  </rule>
-</group>
-
-<!-- ========== Greenbone / OpenVAS / OSPD ========== -->
-<group name="greenbone-rules">
-  <rule id="130000" level="5">
-    <decoded_as>greenbone-audit</decoded_as>
-    <description>Greenbone/OpenVAS: evento genérico detectado</description>
-  </rule>
-  <rule id="130001" level="7">
-    <decoded_as>greenbone-audit</decoded_as>
-    <match>Failed</match>
-    <description>Greenbone/OpenVAS: falha detectada</description>
-  </rule>
-  <rule id="130002" level="8">
-    <decoded_as>greenbone-audit</decoded_as>
-    <match>Connection refused</match>
-    <description>Greenbone/OpenVAS: conexão com scanner recusada</description>
-  </rule>
-  <rule id="130003" level="10">
-    <decoded_as>greenbone-audit</decoded_as>
-    <match>CRITICAL</match>
-    <description>Greenbone/OpenVAS: erro crítico</description>
-  </rule>
-  <rule id="130004" level="3">
-    <decoded_as>openvas-audit</decoded_as>
-    <match>started</match>
-    <description>OpenVAS Scanner: início de varredura</description>
-  </rule>
-  <rule id="130005" level="5">
-    <decoded_as>openvas-audit</decoded_as>
-    <match>finished</match>
-    <description>OpenVAS Scanner: varredura concluída</description>
-  </rule>
-  <rule id="130006" level="10">
-    <decoded_as>openvas-audit</decoded_as>
-    <match>database is locked</match>
-    <description>OpenVAS: erro de banco de dados bloqueado</description>
-  </rule>
-</group>
-
-<group name="greenbone-rules,ospd">
-  <rule id="130010" level="3">
-    <decoded_as>greenbone-ospd-log</decoded_as>
-    <description>Greenbone OSPD: evento informativo</description>
-    <options>no_full_log</options>
-    <match>INFO</match>
-  </rule>
-  <rule id="130011" level="7">
-    <decoded_as>greenbone-ospd-log</decoded_as>
-    <description>Greenbone OSPD: alerta WARNING</description>
-    <match>WARN</match>
-  </rule>
-  <rule id="130012" level="10">
-    <decoded_as>greenbone-ospd-log</decoded_as>
-    <description>Greenbone OSPD: erro crítico</description>
-    <match>CRITICAL</match>
-  </rule>
-</group>
-
-<!-- ========== VirusTotal -> a partir do integrations.log ========== -->
-<group name="local">
-  <rule id="100500" level="8">
-    <decoded_as>virustotal-detection</decoded_as>
-    <description>VirusTotal: hash $(sha256) detectado por $(detections)/$(total) mecanismos</description>
-    <group>virustotal,malware</group>
-  </rule>
-  <rule id="100501" level="4">
-    <decoded_as>virustotal-warning</decoded_as>
-    <description>VirusTotal: hash $(sha256) não encontrado ou limite da API atingido</description>
-    <group>virustotal,info</group>
-  </rule>
-</group>
-EOF
-
-# =========================
-# CONFIG: local_decoder.xml
-# =========================
-msg "📝 Gravando ${LOCAL_DECODERS}..."
-cat > "$LOCAL_DECODERS" <<"EOF"
-<!-- ========== Harbor Core / JobService / Trivy Decoders ========== -->
-<decoder name="harbor-core-json">
-  <prematch>harbor-core </prematch>
-  <plugin_decoder>JSON_Decoder</plugin_decoder>
-</decoder>
-
-<decoder name="harbor-jobservice-json">
-  <prematch>harbor-jobservice </prematch>
-  <plugin_decoder>JSON_Decoder</plugin_decoder>
-</decoder>
-
-<decoder name="trivy-adapter-json">
-  <prematch>harbor-trivy </prematch>
-  <plugin_decoder>JSON_Decoder</plugin_decoder>
-</decoder>
-
-<!-- ========== Metasploit Decoder ========== -->
-<decoder name="metasploit-audit">
-  <prematch>metasploit</prematch>
-  <regex>^[^\s]+\s+[0-9]+\s+[0-9]{2}:[0-9]{2}:[0-9]{2}\s+[^\s]+\s+metasploit\s+(.*)$</regex>
-  <order>message</order>
-</decoder>
-
-<!-- ========== Mitmproxy Decoders ========== -->
-<decoder name="mitmproxy-audit">
-  <prematch>mitmproxy</prematch>
-  <regex>^[A-Za-z]{3}\s+[0-9]{1,2}\s+[0-9:]{8}\s+[^\s]+\s+mitmproxy\s+(.*)$</regex>
-  <order>message</order>
-</decoder>
-
-<decoder name="mitmproxy-audit-raw">
-  <prematch>MITM-</prematch>
-  <regex>^.*\\[MITM-[A-Z0-9-]+\\].*$</regex>
-  <order>id</order>
-</decoder>
-
-<!-- ========== OWASP ZAP Decoder ========== -->
-<decoder name="zap-audit">
-  <prematch>zap</prematch>
-  <regex>^(.*)$</regex>
-  <order>message</order>
-</decoder>
-
-<!-- ========== Trivy Decoders (genéricos) ========== -->
-<decoder name="trivy-audit">
-  <prematch>trivy</prematch>
-  <regex>^.*trivy.*$</regex>
-  <order>message</order>
-</decoder>
-<decoder name="trivy-info">
-  <prematch>trivy</prematch>
-  <regex>[INFO]</regex>
-  <order>level</order>
-</decoder>
-<decoder name="trivy-warn">
-  <prematch>trivy</prematch>
-  <regex>[WARN]</regex>
-  <order>level</order>
-</decoder>
-<decoder name="trivy-error">
-  <prematch>trivy</prematch>
-  <regex>[ERROR]</regex>
-  <order>level</order>
-</decoder>
-
-<!-- ========== Greenbone / OpenVAS / OSPD ========== -->
-<decoder name="greenbone-audit">
-  <prematch>greenbone</prematch>
-  <regex>^[A-Za-z]{3}\s+[0-9]{1,2}\s+[0-9:]{8}\s+[^\s]+\s+greenbone\s+(.*)$</regex>
-  <order>message</order>
-</decoder>
-
-<decoder name="openvas-audit">
-  <prematch>openvas</prematch>
-  <regex>^[A-Za-z]{3}\s+[0-9]{1,2}\s+[0-9:]{8}\s+[^\s]+\s+openvas\s+(.*)$</regex>
-  <order>message</order>
-</decoder>
-
-<decoder name="greenbone-ospd-log">
-  <prematch>OSPD</prematch>
-  <regex>^OSPD[7]:\s*([A-Z]+):\s*(.*)$</regex>
-  <order>level,message</order>
-</decoder>
-
-<!-- ========== VirusTotal no integrations.log ========== -->
-<decoder name="virustotal-detection">
-  <prematch>✅</prematch>
-  <regex>^✅ ([a-fA-F0-9]{64}) detected by ([0-9]+) / ([0-9]+) engines$</regex>
-  <order>sha256 detections total</order>
-</decoder>
-
-<decoder name="virustotal-warning">
-  <prematch>⚠️</prematch>
-  <regex>^⚠️ ([a-fA-F0-9]{64}) not found on VirusTotal or API limit reached$</regex>
-  <order>sha256</order>
-</decoder>
-EOF
-
-# =========================
-# VIRUSTOTAL WRAPPER
-# =========================
-msg "🔗 Ajustando integração VirusTotal..."
-cat > "$VT_WRAPPER" <<"EOF"
-#!/bin/sh
-# Wazuh - VirusTotal integration wrapper (ordem <alert_file> <api_key> ...)
-ALERT_FILE="$1"
-API_KEY="$2"
-
-PYTHON="/var/ossec/framework/python/bin/python3"
-SCRIPT="/var/ossec/integrations/virustotal.py"
-[ ! -x "$PYTHON" ] && PYTHON="/usr/bin/python3"
-
-if [ -f "$ALERT_FILE" ] && [ -n "$API_KEY" ]; then
-  "$PYTHON" "$SCRIPT" -k "$API_KEY" -f "$ALERT_FILE"
-else
-  echo "Usage: virustotal <alert_file> <api_key> ..." >&2
-  exit 1
-fi
-EOF
-
-# Permissões recomendadas
-chown root:wazuh "$VT_WRAPPER"
-chmod 750 "$VT_WRAPPER"
-
-# (Se o virustotal.py não existir, apenas avisa. Pacotes Wazuh geralmente trazem)
-if [ ! -f "$VT_PY" ]; then
-  msg "⚠️  $VT_PY não encontrado. Coloque o virustotal.py oficial aqui (mesma versão do Wazuh)."
-fi
-
-# =========================
-# PERMISSÕES GERAIS
+# PERMISSÕES GERAIS E GRUPOS
 # =========================
 msg "🔒 Ajustando permissões..."
 chown root:wazuh "$OSSEC_CONF"
 chmod 640 "$OSSEC_CONF"
-chown wazuh:wazuh "$LOCAL_RULES" "$LOCAL_DECODERS"
-chmod 640 "$LOCAL_RULES" "$LOCAL_DECODERS"
-chown -R wazuh:wazuh /var/ossec/etc/shared /var/ossec/logs /var/ossec/queue
-chmod 750 /var/ossec/{logs,queue,etc/shared}
+chown -R wazuh:wazuh /var/ossec/etc/shared /var/ossec/logs /var/ossec/queue || true
+chmod 750 /var/ossec/{logs,queue,etc/shared} || true
+
+# Adiciona wazuh aos grupos adm e syslog
+if id wazuh &>/dev/null; then
+  usermod -aG adm,syslog wazuh
+  msg "✅ Usuário 'wazuh' adicionado aos grupos adm e syslog."
+else
+  msg "⚠️ Usuário 'wazuh' ainda não existe. Será criado durante instalação do pacote."
+fi
 
 # =========================
 # VALIDAÇÃO DE SINTAXE
@@ -597,6 +274,18 @@ chmod 750 /var/ossec/{logs,queue,etc/shared}
 msg "🧪 Validando configuração (wazuh-analysisd -t)..."
 if ! /var/ossec/bin/wazuh-analysisd -t; then
   fail "Validação de configuração falhou."
+fi
+
+# =========================
+# EXECUTAR DEPLOY VIA ANSIBLE
+# =========================
+msg "🚀 Executando deploy Wazuh via Ansible..."
+if command -v ansible-playbook >/dev/null 2>&1; then
+    ansible-playbook "$PLAYBOOKDIR/deploy_wazuh_allinone.yml" || fail "Falha ao executar o deploy via Ansible."
+    msg "✅ Deploy Wazuh via Ansible concluído com sucesso!"
+else
+    msg "⚠️ Ansible não encontrado. Execute primeiro 'install_ansible.sh'."
+    exit 1
 fi
 
 # =========================
@@ -610,8 +299,7 @@ systemctl restart wazuh-indexer wazuh-manager wazuh-dashboard
 # CRIAR/DEFINIR SENHA DO DASHBOARD
 # =========================
 msg "🔐 Definindo senha do usuário 'admin' no dashboard..."
-DASH_PASS="$(openssl rand -base64 18 | tr -d '\n' )"
-# Ferramenta oficial de senha do dashboard (ajuste ao path da sua instalação)
+DASH_PASS="$(openssl rand -base64 18 | tr -d '\n')"
 if command -v /usr/share/wazuh-dashboard/bin/wazuh-passwords-tool >/dev/null 2>&1; then
   /usr/share/wazuh-dashboard/bin/wazuh-passwords-tool --user admin --password "$DASH_PASS" >/dev/null
 else
@@ -619,7 +307,7 @@ else
 fi
 
 # =========================
-# README
+# README FINAL
 # =========================
 msg "📘 Gerando README..."
 IP="$(get_ip)"
@@ -649,8 +337,6 @@ Diretórios importantes:
 VirusTotal:
 - API Key: ${VT_API_KEY:-REPLACE_ME}
 - Eventos: /var/ossec/logs/integrations.log (coletado pelo ossec.conf)
-- Alerta aparece no Dashboard (regras 100500/100501) quando o wrapper escrever:
-  ✅ <sha256> detected by N / T engines
 ----------------------------------------------------------
 Comandos úteis:
 - Teste config:    sudo /var/ossec/bin/wazuh-analysisd -t
@@ -662,7 +348,6 @@ Comandos úteis:
 Teste EICAR + VT:
 echo -n "X5O!P%@AP[4\\PZX54(P^)7CC)7}\\\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\\\$H+H*" | sudo tee /usr/local/bin/eicar_vt.txt >/dev/null
 sudo chmod 644 /usr/local/bin/eicar_vt.txt
-# aguarde o syscheck gerar alerta; verifique:
 sudo tail -f /var/ossec/logs/integrations.log
 ==========================================================
 EOF
@@ -676,3 +361,4 @@ msg "=========================================================="
 msg "🔗 Dashboard: https://$IP:5601"
 msg "👤 admin / 🔑 $DASH_PASS"
 msg "📘 README: $READMefile"
+msg "=========================================================="

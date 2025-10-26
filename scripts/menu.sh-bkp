@@ -66,34 +66,16 @@ main_menu() {
 # ===============================
 prerequisites_menu() {
     while true; do
-        CHOICE=$(whiptail --title "Pré-requisitos" --menu "Escolha uma opção" 22 78 12 \
-            "1" "Criar Estrutura de Diretórios" \
-            "2" "Criar Estrutura Rsyslog" \
-            "3" "Instalar Básicos" \
-            "4" "Instalar Docker" \
-            "5" "Instalar Ansible" \
+        CHOICE=$(whiptail --title "Pré-requisitos" --menu "Escolha uma opção" 20 78 10 \
+            "1" "Instalar Básicos" \
+            "2" "Instalar Docker" \
+            "3" "Instalar Ansible" \
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
         case $CHOICE in
-            1)
-                bash "$SCRIPTS_PATH/create_dirs.sh"
-                if [ $? -eq 0 ]; then
-                    whiptail --msgbox "✅ Estrutura de diretórios criada e permissionada com sucesso!" 8 60
-                else
-                    whiptail --msgbox "❌ Erro ao criar estrutura de diretórios. Verifique os logs." 8 60
-                fi
-                ;;
-            2)
-                bash "$SCRIPTS_PATH/create_rsyslog_structure.sh"
-                if [ $? -eq 0 ]; then
-                    whiptail --msgbox "✅ Estrutura Rsyslog criada e arquivos configurados com sucesso!" 8 60
-                else
-                    whiptail --msgbox "❌ Falha ao criar estrutura Rsyslog. Verifique permissões e logs." 8 60
-                fi
-                ;;
-            3) bash "$SCRIPTS_PATH/install_basics.sh" ;;
-            4) bash "$SCRIPTS_PATH/install_docker.sh" ;;
-            5) bash "$SCRIPTS_PATH/install_ansible.sh" ;;
+            1) bash "$SCRIPTS_PATH/install_basics.sh" ;;
+            2) bash "$SCRIPTS_PATH/install_docker.sh" ;;
+            3) bash "$SCRIPTS_PATH/install_ansible.sh" ;;
             0) break ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
@@ -141,7 +123,7 @@ gestion_menu() {
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
         case $CHOICE in
-            1) show_status ;;
+            1) show_status ;;         # agora seguro
             2) restart_wazuh ;;
             3) restart_containers_menu ;;
             0) break ;;
@@ -151,7 +133,7 @@ gestion_menu() {
 }
 
 # ===============================
-# Status
+# Status (corrigido para não abortar em grep vazio)
 # ===============================
 show_status() {
     local STATUS_TEXT
@@ -159,6 +141,7 @@ show_status() {
     local H=28
     local W=88
 
+    # WAZUH services
     {
         echo "==== WAZUH Services ===="
         for svc in wazuh-manager wazuh-indexer wazuh-dashboard; do
@@ -171,6 +154,7 @@ show_status() {
         echo ""
     } > "$STATUS_TEXT"
 
+    # Map of tools -> patterns (adjust patterns to your real container names if needed)
     declare -A TOOLS
     TOOLS["OpenVAS"]="greenbone-community|gvm-official|openvas"
     TOOLS["MITMProxy"]="ngsoc_mitmproxy|mitmproxy"
@@ -179,16 +163,19 @@ show_status() {
     TOOLS["Harbor"]="harbor|registry|registryctl|harbor-core|harbor-db|harbor-log|harbor-portal|harbor-jobservice|redis"
     TOOLS["OWASP ZAP"]="ngsoc_zap|zap"
 
+    # Capture docker ps once
     DOCKER_LIST=$(docker ps -a --format "{{.Names}}\t{{.Status}}" 2>/dev/null || true)
 
     for TOOL in OpenVAS MITMProxy Trivy MongoDB Harbor "OWASP ZAP"; do
         pattern="${TOOLS[$TOOL]}"
         echo "==== $TOOL Containers ====" >> "$STATUS_TEXT"
+        # use grep -E with || true to avoid non-zero exit
         matches=$(printf "%s\n" "$DOCKER_LIST" | grep -E "$pattern" || true)
         if [ -z "$matches" ]; then
             echo "  (nenhum container encontrado para $TOOL)" >> "$STATUS_TEXT"
         else
             while IFS=$'\n' read -r line; do
+                # line format: name<TAB>status
                 name=$(printf "%s" "$line" | cut -f1)
                 status=$(printf "%s" "$line" | cut -f2-)
                 if [[ "$status" == Up* ]]; then
@@ -201,6 +188,7 @@ show_status() {
         echo "" >> "$STATUS_TEXT"
     done
 
+    # show in scrollable textbox and then return (no exit)
     whiptail --title "Status dos Serviços e Containers" --scrolltext --textbox "$STATUS_TEXT" $H $W
     rm -f "$STATUS_TEXT"
     return 0
@@ -219,7 +207,7 @@ restart_wazuh() {
 }
 
 # ===============================
-# Restart Containers
+# Restart Containers (seguro)
 # ===============================
 restart_containers_menu() {
     local RESTARTED=false
@@ -234,23 +222,38 @@ restart_containers_menu() {
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
         case $CHOICE in
-            1) conts=$(docker ps -a --format '{{.Names}}' --filter "name=gvm" 2>/dev/null || true)
-               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container OpenVAS encontrado." 8 60 ;;
-            2) conts=$(docker ps -a --format '{{.Names}}' --filter "name=ngsoc_mitmproxy" 2>/dev/null || true)
-               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container MITMProxy encontrado." 8 60 ;;
-            3) conts=$(docker ps -a --format '{{.Names}}' --filter "name=trivy" 2>/dev/null || true)
-               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container Trivy encontrado." 8 60 ;;
-            4) conts=$(docker ps -a --format '{{.Names}}' --filter "name=mongodb" 2>/dev/null || true)
-               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container MongoDB encontrado." 8 60 ;;
-            5) conts=$(docker ps -a --format '{{.Names}}' --filter "name=harbor" 2>/dev/null || true)
-               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container Harbor encontrado." 8 60 ;;
-            6) conts=$(docker ps -a --format '{{.Names}}' --filter "name=zap" 2>/dev/null || true)
-               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container ZAP encontrado." 8 60 ;;
+            1)
+                conts=$(docker ps -a --format '{{.Names}}' --filter "name=gvm" 2>/dev/null || true)
+                if [ -n "$conts" ]; then docker restart $conts && RESTARTED=true; else whiptail --msgbox "Nenhum container OpenVAS encontrado." 8 60; fi
+                ;;
+            2)
+                conts=$(docker ps -a --format '{{.Names}}' --filter "name=ngsoc_mitmproxy" 2>/dev/null || true)
+                if [ -n "$conts" ]; then docker restart $conts && RESTARTED=true; else whiptail --msgbox "Nenhum container MITMProxy encontrado." 8 60; fi
+                ;;
+            3)
+                conts=$(docker ps -a --format '{{.Names}}' --filter "name=trivy" 2>/dev/null || true)
+                if [ -n "$conts" ]; then docker restart $conts && RESTARTED=true; else whiptail --msgbox "Nenhum container Trivy encontrado." 8 60; fi
+                ;;
+            4)
+                conts=$(docker ps -a --format '{{.Names}}' --filter "name=mongodb" 2>/dev/null || true)
+                if [ -n "$conts" ]; then docker restart $conts && RESTARTED=true; else whiptail --msgbox "Nenhum container MongoDB encontrado." 8 60; fi
+                ;;
+            5)
+                conts=$(docker ps -a --format '{{.Names}}' --filter "name=harbor" 2>/dev/null || true)
+                if [ -n "$conts" ]; then docker restart $conts && RESTARTED=true; else whiptail --msgbox "Nenhum container Harbor encontrado." 8 60; fi
+                ;;
+            6)
+                conts=$(docker ps -a --format '{{.Names}}' --filter "name=zap" 2>/dev/null || true)
+                if [ -n "$conts" ]; then docker restart $conts && RESTARTED=true; else whiptail --msgbox "Nenhum container ZAP encontrado." 8 60; fi
+                ;;
             0) break ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
     done
-    [ "$RESTARTED" = true ] && whiptail --msgbox "Containers reiniciados!" 8 50
+
+    if [ "$RESTARTED" = true ]; then
+        whiptail --msgbox "Containers reiniciados!" 8 50
+    fi
 }
 
 # ===============================
@@ -281,72 +284,32 @@ portals_menu() {
 }
 
 # ===============================
-# Estrutura de diretórios (visual)
+# Estrutura de diretórios
 # ===============================
 directory_structure() {
     local DIR_TEXT
     DIR_TEXT=$(mktemp)
     cat <<EOT > "$DIR_TEXT"
 /opt/ngsoc-deploy
+├── Ansible
+│   └── playbooks
+│       ├── deploy_harbor.yml
+│       ├── deploy_mitmproxy.yml
+│       ├── deploy_mongodb.yml
+│       ├── deploy_nginx_exports.yml
+│       ├── deploy_openvas.yml-testar
+│       ├── deploy_trivy.yml
+│       ├── deploy_wazuh.yml
+│       ├── deploy_metasploite.yml
+│       └── deploy_zap.yml
 ├── data
 │   ├── harbor
-│   ├── mitmproxy
+│   ├── mongodb
 │   ├── trivy
-│   ├── trivy-proxy
-│   ├── openvas
-│   ├── metasploit
-│   └── zap
+│   └── mitmproxy
 ├── docs
-│   ├── harbor
-│   ├── mitmproxy
-│   ├── trivy
-│   ├── openvas
-│   ├── metasploit
-│   └── zap
 ├── exports
-│   ├── harbor
-│   ├── mitmproxy
-│   ├── trivy
-│   ├── openvas
-│   ├── metasploit
-│   └── zap
-├── logs
-│   ├── harbor
-│   ├── mitmproxy
-│   ├── trivy
-│   ├── openvas
-│   ├── metasploit
-│   └── zap
-├── reports
-│   ├── harbor
-│   ├── mitmproxy
-│   ├── trivy
-│   ├── openvas
-│   ├── metasploit
-│   └── zap
-├── scripts
-│   ├── install_ansible.sh
-│   ├── install_docker.sh
-│   ├── install_harbor.sh
-│   ├── install_mitmproxy.sh
-│   ├── install_nginx_docker.sh
-│   ├── install_openvas.sh
-│   ├── install_trivy_docker.sh
-│   ├── install_wazuh_full.sh
-│   ├── install_zap_docker.sh
-│   ├── menu.sh
-│   └── restart_all_containers.sh
-├── ansible
-│   ├── playbooks
-│       ├── deploy_mitmproxy.yml
-│       ├── deploy_openvas.yml
-│       ├── deploy_trivy.yml
-│       ├── deploy_metasploit.yml
-│       ├── deploy_zap.yml
-│       ├── deploy_wazuh_allinone.yml
-│       ├── deploy_harbor.yml
-│       └── deploy_nginx.yml
-└── Fim
+└── scripts
 EOT
 
     whiptail --title "Estrutura de Diretórios" --scrolltext --textbox "$DIR_TEXT" 25 80
