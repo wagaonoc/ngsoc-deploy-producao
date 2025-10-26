@@ -1,0 +1,103 @@
+name: greenbone-community-edition
+
+services:
+  # ================================
+  # 🗄️ PostgreSQL Database
+  # ================================
+  pg-gvm:
+    image: registry.community.greenbone.net/community/pg-gvm:stable
+    container_name: greenbone-pg-gvm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gvmd
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - /opt/ngsoc-deploy/data/openvas/psql-data:/var/lib/postgresql/data:rw
+    networks:
+      - ngsoc_net
+
+  # ================================
+  # ⚙️ Redis Cache
+  # ================================
+  redis-server:
+    image: registry.community.greenbone.net/community/redis-server:latest
+    container_name: greenbone-redis
+    restart: unless-stopped
+    volumes:
+      - /opt/ngsoc-deploy/data/openvas/redis-socket:/var/run/redis:rw
+    networks:
+      - ngsoc_net
+
+  # ================================
+  # 🧠 OSPD-OpenVAS Scanner Daemon
+  # ================================
+  ospd-openvas:
+    image: registry.community.greenbone.net/community/ospd-openvas:stable
+    container_name: greenbone-ospd
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    environment:
+      OPENVAS_BINARY: /usr/sbin/openvas
+      GVM_LOG_DEST: /var/lib/gvm/openvas.log        # Força log centralizado
+    volumes:
+      - /opt/ngsoc-deploy/data/openvas/feed-data:/var/lib/gvm/feed-data:rw
+      - /opt/ngsoc-deploy/data/openvas/ospd-openvas-socket:/var/run/ospd:rw
+      - /opt/ngsoc-deploy/logs/openvas:/var/lib/gvm:rw   # <== Montagem real de logs
+    depends_on:
+      - redis-server
+    networks:
+      - ngsoc_net
+
+  # ================================
+  # 🧩 Greenbone Vulnerability Manager (GVMD)
+  # ================================
+  gvmd:
+    image: registry.community.greenbone.net/community/gvmd:stable
+    container_name: greenbone-gvmd
+    restart: unless-stopped
+    environment:
+      ADMIN_USER: admin
+      ADMIN_PASSWORD: Ng5ocAdm1n!23
+      GVM_LOG_DEST: /var/lib/gvm/gvmd.log
+    volumes:
+      - /opt/ngsoc-deploy/data/openvas/gvmd-data:/var/lib/gvm:rw
+      - /opt/ngsoc-deploy/data/openvas/gvmd-socket:/var/run/gvmd:rw
+      - /opt/ngsoc-deploy/data/openvas/ospd-openvas-socket:/var/run/ospd:rw
+      - /opt/ngsoc-deploy/logs/openvas:/var/lib/gvm:rw   # <== Log bind
+    depends_on:
+      - pg-gvm
+      - ospd-openvas
+    networks:
+      - ngsoc_net
+
+  # ================================
+  # 🌐 Greenbone Security Assistant (Web UI)
+  # ================================
+  gsa:
+    image: registry.community.greenbone.net/community/gsa:stable
+    container_name: greenbone-gsa
+    restart: unless-stopped
+    ports:
+      - "192.168.100.23:9392:80"      # Interface Web local
+    environment:
+      GVM_LOG_DEST: /var/lib/gvm/gsad.log
+    volumes:
+      - /opt/ngsoc-deploy/data/openvas/gvmd-socket:/var/run/gvmd:rw
+      - /opt/ngsoc-deploy/logs/openvas:/var/lib/gvm:rw   # <== Log bind
+    depends_on:
+      - gvmd
+    networks:
+      - ngsoc_net
+
+# ================================
+# 🌐 External Network (NG-SOC)
+# ================================
+networks:
+  ngsoc_net:
+    external: true
