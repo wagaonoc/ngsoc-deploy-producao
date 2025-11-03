@@ -1,0 +1,460 @@
+---
+- name: Deploy Harbor (v2.14.0) - NGSOC
+  hosts: localhost
+  become: yes
+  gather_facts: yes
+
+  vars:
+    # ===== Versão/identidade =====
+    harbor_version: "v2.14.0"
+    harbor_hostname: "harbor.local"
+    harbor_http_port: 8081
+    harbor_https_port: 8443
+    harbor_admin_password: "Harbor12345"
+    harbor_db_password: "HarborDBpass"
+
+    # ===== Estrutura NGSOC =====
+    ngsoc_root: "/opt/ngsoc-deploy"
+    harbor_base_dir: "{{ ngsoc_root }}/data/harbor"
+    harbor_installer_dir: "{{ harbor_base_dir }}/installer"
+    harbor_data_dir: "{{ harbor_base_dir }}/data"
+    harbor_logs_dir: "{{ ngsoc_root }}/logs/harbor"
+    harbor_docs_dir: "{{ ngsoc_root }}/docs/harbor"
+    harbor_compose_path: "{{ harbor_installer_dir }}"   # ✅ variável adicionada
+
+    # ===== Docker repo (Ubuntu 22.04) =====
+    docker_release_codename: "jammy"
+
+    # ===== Integração Trivy (opcional) =====
+    use_external_trivy: false
+    external_trivy_network: "ngsoc_net"
+    external_trivy_service_name: "trivy-server"
+    external_trivy_port: 4954
+
+  tasks:
+    # ---------------------
+    # 0) Pré-requisitos
+    # ---------------------
+    - name: Pacotes base
+      ansible.builtin.apt:
+        name: [curl, ca-certificates, gnupg, tar, jq]
+        update_cache: yes
+        state: present
+
+    # ---------------------
+    # 1) Docker CE + Compose
+    # ---------------------
+    - name: Garantir /etc/apt/keyrings
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Instalar chave GPG Docker
+      ansible.builtin.shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Adicionar repo Docker
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.list
+        mode: '0644'
+        content: |
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu {{ docker_release_codename }} stable
+
+    - name: Atualizar cache apt
+      ansible.builtin.apt:
+        update_cache: yes
+
+    - name: Instalar Docker e plugin Compose
+      ansible.builtin.apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-compose-plugin]
+        state: present
+
+    # ---------------------
+    # 2) Estrutura NGSOC
+    # ---------------------
+    - name: Criar diretórios NGSOC do Harbor
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ harbor_installer_dir }}"
+        - "{{ harbor_data_dir }}"
+        - "{{ harbor_logs_dir }}"
+        - "{{ harbor_docs_dir }}"
+        - "/etc/ssl/certs"
+        - "/etc/ssl/private"
+
+    - name: Gerar certificado autoassinado (se ausente)
+      ansible.builtin.shell: |
+        openssl req -newkey rsa:4096 -nodes -sha256 \
+          -keyout /etc/ssl/private/nginx-selfsigned.key \
+          -x509 -days 365 \
+          -out /etc/ssl/certs/nginx-selfsigned.crt \
+          -subj "/CN={{ harbor_hostname }}" \
+          -addext "subjectAltName = DNS:{{ harbor_hostname }},IP:{{ ansible_default_ipv4.address }}"
+      args:
+        creates: /etc/ssl/certs/nginx-selfsigned.crt
+
+    - name: Mapear harbor.local em /etc/hosts (garantia)
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        line: "{{ ansible_default_ipv4.address | default('127.0.0.1') }} {{ harbor_hostname }}"
+        state: present
+        insertafter: EOF
+
+    # ---------------------
+    # 3) Baixar installer oficial
+    # ---------------------
+    - name: Baixar Harbor online installer
+      ansible.builtin.get_url:
+        url: "https://github.com/goharbor/harbor/releases/download/{{ harbor_version }}/harbor-online-installer-{{ harbor_version }}.tgz"
+        dest: "/tmp/harbor-{{ harbor_version }}.tgz"
+        mode: '0644'
+
+    - name: Extrair installer (limpo)
+      ansible.builtin.unarchive:
+        src: "/tmp/harbor-{{ harbor_version }}.tgz"
+        dest: "{{ harbor_installer_dir }}"
+        remote_src: yes
+        creates: "{{ harbor_installer_dir }}/install.sh"
+        extra_opts: ["--strip-components=1"]
+
+    # ---------------------
+    # 4) harbor.yml
+    # ---------------------
+    - name: Escrever harbor.yml (sem Trivy externo)
+      when: not use_external_trivy
+      ansible.builtin.copy:
+        dest: "{{ harbor_installer_dir }}/harbor.yml"
+        mode: '0644'
+        content: |
+          hostname: {{ harbor_hostname }}
+          http:
+            port: {{ harbor_http_port }}
+          https:
+            port: {{ harbor_https_port }}
+            certificate: /etc/ssl/certs/nginx-selfsigned.crt
+            private_key: /etc/ssl/private/nginx-selfsigned.key
+          harbor_admin_password: "{{ harbor_admin_password }}"
+          data_volume: {{ harbor_data_dir }}
+          log:
+            level: info
+            local:
+              location: {{ harbor_logs_dir }}
+            syslog:
+              port: 0
+              protocol: tcp
+          database:
+            password: "{{ harbor_db_password }}"
+          jobservice:
+            max_job_workers: 10
+            job_loggers: [database, stdout]
+            logger_sweeper_duration: 24h
+          notification:
+            webhook_job_max_retry: 3
+            webhook_job_http_client_timeout: 30s
+
+    - name: Escrever harbor.yml (com Trivy externo)
+      when: use_external_trivy
+      ansible.builtin.copy:
+        dest: "{{ harbor_installer_dir }}/harbor.yml"
+        mode: '0644'
+        content: |
+          hostname: {{ harbor_hostname }}
+          http:
+            port: {{ harbor_http_port }}
+          https:
+            port: {{ harbor_https_port }}
+            certificate: /etc/ssl/certs/nginx-selfsigned.crt
+            private_key: /etc/ssl/private/nginx-selfsigned.key
+          harbor_admin_password: "{{ harbor_admin_password }}"
+          data_volume: {{ harbor_data_dir }}
+          log:
+            level: info
+            local:
+              location: {{ harbor_logs_dir }}
+            syslog:
+              port: 0
+              protocol: tcp
+          database:
+            password: "{{ harbor_db_password }}"
+          trivy:
+            server_url: "http://{{ external_trivy_service_name }}:{{ external_trivy_port }}"
+          jobservice:
+            max_job_workers: 10
+            job_loggers: [database, stdout]
+            logger_sweeper_duration: 24h
+          notification:
+            webhook_job_max_retry: 3
+            webhook_job_http_client_timeout: 30s
+
+
+
+
+    # ---------------------
+    # 5) Uninstall anterior + limpeza
+    # ---------------------
+    - name: Uninstall anterior (se existir compose)
+      ansible.builtin.shell: |
+        if [ -f "{{ harbor_installer_dir }}/docker-compose.yml" ]; then
+          cd {{ harbor_installer_dir }} && ./uninstall.sh || true
+        fi
+      ignore_errors: yes
+
+
+    - name: "🧹 LIMPEZA DE CONFLITOS: Remover containers e redes Harbor remanescentes (full clean)"
+      ansible.builtin.shell: |
+        echo "🔍 Listando containers Harbor antigos..."
+        OLD_CONTAINERS=$(docker ps -a --format '{{ "{{.Names}}" }}' | grep -E '^harbor-|^registry|^redis' || true)
+        if [ -n "$OLD_CONTAINERS" ]; then
+          echo "🧹 Removendo containers órfãos:"
+          echo "$OLD_CONTAINERS" | while read -r c; do
+            echo " - Removendo $c"
+            docker rm -f "$c" || true
+          done
+        else
+          echo "✅ Nenhum container Harbor antigo encontrado."
+        fi
+
+        echo "🔍 Verificando redes antigas..."
+        OLD_NETS=$(docker network ls --format '{{ "{{.Name}}" }}' | grep -E 'harbor|installer_harbor' || true)
+        if [ -n "$OLD_NETS" ]; then
+          echo "🧹 Removendo redes órfãs:"
+          echo "$OLD_NETS" | while read -r n; do
+            echo " - Removendo rede $n"
+            docker network rm "$n" || true
+          done
+        else
+          echo "✅ Nenhuma rede antiga encontrada."
+        fi
+      ignore_errors: yes
+      changed_when: false
+
+
+
+    # ---------------------
+    # 6) Gerar compose/configs oficiais
+    # ---------------------
+    - name: Executar install.sh --with-trivy
+      ansible.builtin.shell:
+        cmd: "./install.sh --with-trivy"
+        chdir: "{{ harbor_installer_dir }}"
+      register: harbor_install_result
+      ignore_errors: yes
+      changed_when: true
+
+    # ---------------------
+    # 6.1) Garantir rede ngsoc_net (Bridge externa)
+    # ---------------------
+    - name: 🔗 Garantir que a rede ngsoc_net exista
+      community.docker.docker_network:
+        name: ngsoc_net
+        driver: bridge
+        state: present
+
+
+
+
+    # ---------------------
+    # 7) Patches Pós-Instalação (Implementação Robusta e Autocontida)
+    # ---------------------
+    - name: "💣 PATCH 1/3 (GERAR TEMPLATE): Criar docker-compose-template-harbor.yml dentro do installer"
+      ansible.builtin.copy:
+        dest: "{{ harbor_installer_dir }}/harbor/docker-compose-template-harbor.yml"
+        mode: '0644'
+        content: |
+          version: '3.8'
+          services:
+            log:
+              image: goharbor/harbor-log:{{ harbor_version }}
+              container_name: harbor-log
+              restart: always
+              volumes:
+                - {{ harbor_logs_dir }}:/var/log/docker/:z
+              networks:
+                - ngsoc_net
+
+            registry:
+              image: goharbor/registry-photon:{{ harbor_version }}
+              container_name: registry
+              restart: always
+              volumes:
+                - {{ harbor_data_dir }}/registry:/storage:z
+                - {{ harbor_installer_dir }}/common/config/registry/config.yml:/etc/registry/config.yml:z
+              environment:
+                - REGISTRY_HTTP_ADDR=0.0.0.0:5000
+              networks:
+                - ngsoc_net
+              depends_on:
+                - log
+
+            registryctl:
+              image: goharbor/harbor-registryctl:{{ harbor_version }}
+              container_name: registryctl
+              restart: always
+              volumes:
+                - {{ harbor_data_dir }}/registry:/storage:z
+                - {{ harbor_installer_dir }}/common/config/registryctl/config.yml:/etc/registryctl/config.yml:z
+              networks:
+                - ngsoc_net
+              depends_on:
+                - registry
+
+            core:
+              image: goharbor/harbor-core:{{ harbor_version }}
+              container_name: harbor-core
+              restart: always
+              volumes:
+                - {{ harbor_data_dir }}:/data:z
+                - {{ harbor_installer_dir }}/common/config/core/app.conf:/etc/core/app.conf:z
+                - {{ harbor_installer_dir }}/common/config/core/env:/etc/core/env:z
+              env_file:
+                - {{ harbor_installer_dir }}/common/config/core/env
+              depends_on:
+                - registry
+                - registryctl
+              networks:
+                - ngsoc_net
+
+            jobservice:
+              image: goharbor/harbor-jobservice:{{ harbor_version }}
+              container_name: harbor-jobservice
+              restart: always
+              volumes:
+                - {{ harbor_data_dir }}:/data:z
+                - {{ harbor_installer_dir }}/common/config/jobservice/config.yml:/etc/jobservice/config.yml:z
+                - {{ harbor_installer_dir }}/common/config/jobservice/env:/etc/jobservice/env:z
+              env_file:
+                - {{ harbor_installer_dir }}/common/config/jobservice/env
+              depends_on:
+                - core
+              networks:
+                - ngsoc_net
+
+            portal:
+              image: goharbor/harbor-portal:{{ harbor_version }}
+              container_name: harbor-portal
+              restart: always
+              networks:
+                - ngsoc_net
+
+            trivy-adapter:
+              image: goharbor/trivy-adapter-photon:{{ harbor_version }}
+              container_name: harbor-trivy
+              restart: always
+              env_file:
+                - {{ harbor_installer_dir }}/common/config/trivy-adapter/env
+              networks:
+                - ngsoc_net
+              depends_on:
+                - core
+
+            proxy:
+              image: goharbor/nginx-photon:{{ harbor_version }}
+              container_name: harbor-proxy
+              restart: always
+              ports:
+                - "8081:8080"
+                - "8443:8443"
+              volumes:
+                - {{ harbor_installer_dir }}/common/config/nginx:/etc/nginx:z
+                - /etc/ssl/certs/nginx-selfsigned.crt:/etc/ssl/certs/nginx-selfsigned.crt:ro
+                - /etc/ssl/private/nginx-selfsigned.key:/etc/ssl/private/nginx-selfsigned.key:ro
+              depends_on:
+                - core
+                - portal
+              networks:
+                - ngsoc_net
+
+          networks:
+            ngsoc_net:
+              external: true
+
+    - name: "💣 PATCH 2/3 (YAML/PORTA FIX): Substituir docker-compose.yml pelo template validado"
+      ansible.builtin.copy:
+        src: "{{ harbor_installer_dir }}/harbor/docker-compose-template-harbor.yml"
+        dest: "{{ harbor_installer_dir }}/docker-compose.yml"
+        remote_src: true
+        mode: '0644'
+      register: harbor_template_copy
+      changed_when: harbor_template_copy.changed
+
+    - name: "💣 PATCH 3/3 (VALIDAÇÃO FINAL): Garantir que o compose é válido"
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ harbor_installer_dir }}/docker-compose.yml config"
+      args:
+        chdir: "{{ harbor_installer_dir }}"
+      register: compose_check_final
+      failed_when: compose_check_final.rc != 0
+      changed_when: false
+
+
+
+
+
+
+
+
+    # ---------------------
+    # 8) Subir stack
+    # ---------------------
+    - name: docker compose up -d
+      ansible.builtin.shell:
+        cmd: docker compose up -d
+        chdir: "{{ harbor_installer_dir }}"
+      register: up_result
+      changed_when: true
+
+    - name: docker compose ps
+      ansible.builtin.command: docker compose ps
+      args:
+        chdir: "{{ harbor_installer_dir }}"
+      register: ps_out
+      changed_when: false
+
+    # ---------------------
+    # 9) README e saída
+    # ---------------------
+    - name: Gerar README.txt (docs)
+      ansible.builtin.copy:
+        dest: "{{ harbor_docs_dir }}/README.txt"
+        mode: '0644'
+        content: |
+          ==========================================================
+          NG-SOC - Harbor Registry ({{ harbor_version }})
+          ==========================================================
+          Web:
+            HTTPS: {{ harbor_hostname }}:{{ harbor_https_port }}
+            HTTP : {{ harbor_hostname }}:{{ harbor_http_port }}
+
+          Admin:
+            user: admin
+            pass: {{ harbor_admin_password }}
+
+          Diretórios:
+            Installer : {{ harbor_installer_dir }}
+            Data      : {{ harbor_data_dir }}
+            Logs      : {{ harbor_logs_dir }}
+
+          Notas:
+            - Syslog(1514) desativado.
+            - Logs locais em {{ harbor_logs_dir }}.
+            - Trivy externo: {{ 'habilitado em ' ~ external_trivy_network if use_external_trivy else 'desabilitado' }}.
+
+    - name: Mostrar ps
+      ansible.builtin.debug:
+        var: ps_out.stdout_lines
+
+  handlers:
+    - name: Validar compose Harbor
+      ansible.builtin.command:
+        cmd: "docker compose -f {{ harbor_installer_dir }}/docker-compose.yml config"
+      args:
+        chdir: "{{ harbor_installer_dir }}"
+      register: compose_validation
+      failed_when: compose_validation.rc != 0
+      changed_when: false

@@ -53,16 +53,20 @@ show_welcome() {
 # ===============================
 main_menu() {
     while true; do
-        CHOICE=$(whiptail --title "NGSOC - Menu Principal" --menu "Escolha uma opção" "$HEIGHT" "$WIDTH" 10 \
+        CHOICE=$(whiptail --title "NGSOC - Menu Principal" --menu "Escolha uma opção" "$HEIGHT" "$WIDTH" 12 \
             "1" "Pré-requisitos" \
             "2" "Implantação" \
             "3" "Gestão" \
+            "4" "Portais" \
+            "5" "Estrutura de diretórios" \
             "0" "Sair" 3>&1 1>&2 2>&3)
 
         case "$CHOICE" in
             1) prerequisites_menu ;;
             2) deployment_menu ;;
             3) gestion_menu ;;
+            4) portals_menu ;;
+            5) directory_structure ;;
             0) exit 0 ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
@@ -140,24 +144,20 @@ deployment_menu() {
 }
 
 # ===============================
-# Gestão (agora inclui Portais e Estrutura de Diretórios)
+# Gestão
 # ===============================
 gestion_menu() {
     while true; do
-        CHOICE=$(whiptail --title "Gestão" --menu "Escolha uma opção" 22 78 14 \
+        CHOICE=$(whiptail --title "Gestão" --menu "Escolha uma opção" 20 78 12 \
             "1" "Status Serviços e Containers" \
             "2" "Restart Wazuh" \
             "3" "Restart Containers por Componente" \
-            "4" "Portais (abrir URLs)" \
-            "5" "Estrutura de Diretórios (visual)" \
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
         case "$CHOICE" in
             1) show_status ;;
             2) restart_wazuh ;;
             3) restart_containers_menu ;;
-            4) portals_menu ;;            # movido para cá
-            5) directory_structure ;;     # movido para cá
             0) break ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
@@ -324,7 +324,7 @@ restart_containers_menu() {
 }
 
 # ===============================
-# Portais (mantido como função; invocado agora a partir de Gestão)
+# Portais
 # ===============================
 portals_menu() {
     while true; do

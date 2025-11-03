@@ -1,0 +1,458 @@
+#!/bin/bash
+set -euo pipefail
+# ===============================================================
+# 🧰 RESTAURAÇÃO E FIX DO PREPARE DO HARBOR (v2.14.0) – FINAL UNIVERSAL REVISADO
+# ===============================================================
+
+HARBOR_BASE="/opt/ngsoc-deploy/data/harbor"
+INSTALLER_DIR="${HARBOR_BASE}/installer"
+INSTALLER_HARBOR_DIR="${INSTALLER_DIR}/harbor"
+LOG_DIR="/opt/ngsoc-deploy/logs/harbor"
+CERTS_DIR_COMPAT="${HARBOR_BASE}/certs"
+REAL_CERT_PATH="/etc/ssl/certs/nginx-selfsigned.crt"
+REAL_KEY_PATH="/etc/ssl/private/nginx-selfsigned.key"
+SECRET_DIR="${HARBOR_BASE}/data/secret"
+KEYS_DIR="${SECRET_DIR}/keys"
+TLS_DIR="${SECRET_DIR}/tls"
+SECRETKEY_FILE="${KEYS_DIR}/secretkey"
+SECRETKEY_VALUE="nsoIfbwfJ9I4NUhz"
+PREF_YML="${INSTALLER_HARBOR_DIR}/harbor.yml"
+FALLBACK_DIR="${HARBOR_BASE}/prepare_conf"
+FALLBACK_YML="${FALLBACK_DIR}/harbor.yml"
+GEN_DIR="${HARBOR_BASE}/generated_prepare"
+GEN_CONFIG_DIR="${GEN_DIR}/common/config"
+PREPARE_IMAGE="goharbor/prepare:v2.14.0"
+
+echo "=============================================================="
+echo "🧰 RESTAURAÇÃO E FIX DO PREPARE DO HARBOR (v2.14.0)"
+echo "=============================================================="
+
+sudo mkdir -p "${INSTALLER_HARBOR_DIR}" "${LOG_DIR}" "${CERTS_DIR_COMPAT}" \
+              "${KEYS_DIR}" "${TLS_DIR}" "${FALLBACK_DIR}" "${GEN_CONFIG_DIR}"
+
+# ---------------------------------------------------------------
+# 1️⃣ Certificados e Secretkey
+# ---------------------------------------------------------------
+echo "1️⃣ Garantindo certificados e segredos..."
+sudo cp -n "${REAL_CERT_PATH}" "${CERTS_DIR_COMPAT}/harbor.crt" 2>/dev/null || true
+sudo cp -n "${REAL_KEY_PATH}"  "${CERTS_DIR_COMPAT}/harbor.key"  2>/dev/null || true
+sudo chmod 600 "${CERTS_DIR_COMPAT}/harbor."*
+[[ ! -f "${SECRETKEY_FILE}" || "$(wc -c <"${SECRETKEY_FILE}" | tr -d ' ')" -ne 16 ]] && \
+  echo -n "${SECRETKEY_VALUE}" | sudo tee "${SECRETKEY_FILE}" >/dev/null
+sudo chmod 600 "${SECRETKEY_FILE}"
+
+# ---------------------------------------------------------------
+# 2️⃣ CA Interna
+# ---------------------------------------------------------------
+echo "2️⃣ Garantindo CA interna..."
+if [[ ! -f "${TLS_DIR}/harbor_internal_ca.crt" ]]; then
+  sudo openssl req -x509 -newkey rsa:2048 -days 365 -nodes \
+    -keyout "${TLS_DIR}/harbor_internal_ca.key" \
+    -out "${TLS_DIR}/harbor_internal_ca.crt" \
+    -subj "/CN=harbor.local/O=POSITIVOS+/C=BR" >/dev/null 2>&1 || true
+  sudo chmod 600 "${TLS_DIR}"/*
+fi
+
+# ---------------------------------------------------------------
+# 3️⃣ Seleção do harbor.yml
+# ---------------------------------------------------------------
+echo "3️⃣ Selecionando harbor.yml..."
+HARBOR_YML="${PREF_YML}"
+if [[ ! -f "${HARBOR_YML}" ]]; then
+  echo "   ⚠️ ${PREF_YML} não encontrado; criando fallback..."
+  sudo mkdir -p "$(dirname "${FALLBACK_YML}")"
+  HARBOR_YML="${FALLBACK_YML}"
+  sudo tee "${HARBOR_YML}" >/dev/null <<'EOF'
+hostname: harbor.local
+http:
+  port: 8081
+https:
+  port: 8443
+  certificate: /etc/ssl/certs/nginx-selfsigned.crt
+  private_key: /etc/ssl/private/nginx-selfsigned.key
+harbor_admin_password: "Harbor12345"
+database:
+  password: "HarborDBpass"
+data_volume: /opt/ngsoc-deploy/data/harbor/data
+log_location: /opt/ngsoc-deploy/logs/harbor
+log:
+  level: info
+  local:
+    location: /opt/ngsoc-deploy/logs/harbor
+  syslog:
+    port: 0
+    protocol: tcp
+trivy:
+  server_url: http://localhost:4954
+  ignore_unfixed: true
+  skip_update: false
+  vuln_type: "os,library"
+  security_check: "vuln"
+jobservice:
+  max_job_workers: 10
+  logger:
+    sweeper_duration: 5
+    loggers:
+      - name: STD_OUTPUT
+        level: INFO
+      - name: FILE
+        level: INFO
+        location: /var/log/jobs.log
+EOF
+fi
+
+# ---------------------------------------------------------------
+# 4️⃣ Corrigir jobservice
+# ---------------------------------------------------------------
+echo "4️⃣ Corrigindo bloco 'jobservice'..."
+sudo sed -i '/^jobservice:/,/^$/{
+  /^jobservice:/!d
+  i\jobservice:\n  max_job_workers: 10\n  logger_sweeper_duration: 1\n  job_loggers:\n    - file\n    - stdout
+  d
+}' "${HARBOR_YML}"
+
+# ---------------------------------------------------------------
+# 5️⃣ Recriar bloco notification no formato esperado
+# ---------------------------------------------------------------
+echo "5️⃣ Corrigindo bloco 'notification'..."
+if grep -q "^notification:" "${HARBOR_YML}"; then
+  echo "   🧹 Removendo bloco 'notification:' existente..."
+  sudo sed -i '/^notification:/,/^[^[:space:]]/d' "${HARBOR_YML}"
+fi
+
+sudo tee -a "${HARBOR_YML}" >/dev/null <<'EOF'
+
+# ============================================================
+# Bloco compatível com prepare v2.14.0
+# ============================================================
+notification:
+  webhook_job_max_retry: 3
+  webhook_job_http_client_timeout: 30s
+EOF
+
+echo "   🔍 Verificação final do bloco 'notification':"
+grep -A2 "notification:" "${HARBOR_YML}" || echo "   ⚠️ Bloco não encontrado — verifique manualmente."
+
+# ---------------------------------------------------------------
+# 6️⃣ Limpeza de resíduos de execuções anteriores
+# ---------------------------------------------------------------
+echo "6️⃣ Limpando resíduos de execuções anteriores..."
+sudo docker ps -a --format '{{.ID}} {{.Image}}' | grep 'goharbor/prepare' | awk '{print $1}' | xargs -r sudo docker rm -f >/dev/null 2>&1 || true
+sudo rm -rf "${GEN_DIR}"
+sudo mkdir -p "${GEN_CONFIG_DIR}"
+
+# ---------------------------------------------------------------
+# 7️⃣ Executar prepare
+# ---------------------------------------------------------------
+echo "7️⃣ Executando prepare (isolado e seguro)..."
+WITH_TRIVY="--with-trivy"
+
+sudo docker run --rm \
+  -v "${HARBOR_YML}":/input/harbor.yml:ro \
+  -v "${HARBOR_BASE}/data":/data \
+  -v "${GEN_DIR}":/compose_location \
+  -v "${GEN_CONFIG_DIR}":/config \
+  -v /:/hostfs:ro \
+  -v /etc/ssl/certs:/etc/ssl/certs:ro \
+  -v /etc/ssl/private:/etc/ssl/private:ro \
+  "${PREPARE_IMAGE}" prepare ${WITH_TRIVY} || {
+    echo "❌ Falha ao executar prepare."
+    exit 1
+  }
+
+# ---------------------------------------------------------------
+# 8️⃣ Sincronização segura
+# ---------------------------------------------------------------
+TS=$(date +%Y%m%d-%H%M%S)
+COMPOSE_FILE="${INSTALLER_HARBOR_DIR}/docker-compose.yml"
+if [[ -f "${GEN_DIR}/docker-compose.yml" ]]; then
+  [[ -f "${COMPOSE_FILE}" ]] && \
+    sudo cp -a "${COMPOSE_FILE}" "${COMPOSE_FILE}.bak.${TS}"
+  sudo cp -f "${GEN_DIR}/docker-compose.yml" "${COMPOSE_FILE}"
+fi
+if compgen -G "${GEN_CONFIG_DIR}/*" >/dev/null; then
+  rsync -a --delete "${GEN_CONFIG_DIR}/" "${INSTALLER_HARBOR_DIR}/common/config/"
+fi
+
+# ---------------------------------------------------------------
+# 🧩 FIX PORTA 1514 – Remoção para evitar conflito com Wazuh
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🧩 Removendo mapeamento de porta 1514 (conflito com Wazuh)..."
+  sudo sed -i '/1514/d' "${COMPOSE_FILE}"
+  sudo sed -i '/10514/d' "${COMPOSE_FILE}"
+  echo "   ✅ Portas 1514 e 10514 removidas do docker-compose.yml com sucesso."
+  echo "   🧾 Logs continuarão sendo gravados em /opt/ngsoc-deploy/logs/harbor"
+fi
+
+# ---------------------------------------------------------------
+# 🧱 Neutralizar rsyslog interno (porta 10514)
+# ---------------------------------------------------------------
+LOG_CONF_FILE="${INSTALLER_HARBOR_DIR}/common/config/log/rsyslog_docker.conf"
+LOG_MAIN_FILE="${INSTALLER_HARBOR_DIR}/common/config/log/log.conf"
+if [[ -f "${LOG_CONF_FILE}" ]]; then
+  sudo sed -i 's/^input(type="imtcp" port="10514")/# desativado: conflito Wazuh/' "${LOG_CONF_FILE}"
+fi
+if [[ -f "${LOG_MAIN_FILE}" ]]; then
+  sudo sed -i '/10514/d' "${LOG_MAIN_FILE}"
+fi
+echo "   ✅ Porta 10514 desativada no rsyslog interno do Harbor."
+
+# ---------------------------------------------------------------
+# 🧩 Normalização robusta do serviço 'log' → ports: []
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🛠️  Normalizando 'services.log.ports' para array YAML..."
+  sudo awk '
+    BEGIN{in_log=0; in_hlog=0}
+    /^services:/ {print; next}
+    /^  log:$/    {in_log=1; print; next}
+    /^  harbor-log:$/ {in_hlog=1; print; next}
+    (in_log || in_hlog) {
+      if ($0 ~ /^    ports:/) { print "____PORTS_PLACEHOLDER____"; next }
+      if ($0 ~ /^      - /)   { next }
+      if ($0 ~ /^  [a-zA-Z0-9_-]+:/) {
+        print "    ports: []"
+        in_log=0; in_hlog=0
+      }
+      print; next
+    }
+    {print}
+  ' "${COMPOSE_FILE}" | sudo tee "${COMPOSE_FILE}.tmp1" >/dev/null
+  sudo sed -i 's/^____PORTS_PLACEHOLDER____$/    ports: []/' "${COMPOSE_FILE}.tmp1"
+  sudo mv "${COMPOSE_FILE}.tmp1" "${COMPOSE_FILE}"
+  echo "   ✅ services.log(.|)ports normalizado."
+fi
+
+# ---------------------------------------------------------------
+# 9️⃣ Correção estrutural do bloco 'services.log.volumes'
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🧱 Corrigindo estrutura de volumes do serviço 'log'..."
+  TMP_FIX="${COMPOSE_FILE}.tmp_fixlog"
+
+  awk '
+    BEGIN {in_log=0; in_vol=0}
+    /^  log:$/        {in_log=1; print; next}
+    (in_log && /^  [a-zA-Z0-9_-]+:/ && $1=="  " && $2!="log:") {in_log=0}
+    {
+      if (in_log && /^    volumes:/) {
+        print "    volumes:"
+        print "      - type: bind"
+        print "        source: ./common/config/log/logrotate.conf"
+        print "        target: /etc/logrotate.d/logrotate.conf"
+        print "      - type: bind"
+        print "        source: ./common/config/log/rsyslog_docker.conf"
+        print "        target: /etc/rsyslog.d/rsyslog_docker.conf"
+        print "      - /opt/ngsoc-deploy/logs/harbor/:/var/log/docker/:z"
+        in_vol=1
+        next
+      }
+      if (in_vol && $0 ~ /^    [a-zA-Z]/) {in_vol=0}
+      if (!in_vol) print
+    }
+  ' "${COMPOSE_FILE}" > "${TMP_FIX}"
+
+  sudo mv "${TMP_FIX}" "${COMPOSE_FILE}"
+  echo "   ✅ Bloco 'services.log.volumes' reconstruído com sucesso."
+fi
+
+# ---------------------------------------------------------------
+# 🔧 Remover duplicações de 'ports'
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🧹 Corrigindo duplicações de 'ports:' dentro do docker-compose.yml..."
+  sudo awk '
+    BEGIN {ports_seen=0}
+    {
+      if ($0 ~ /^    ports:/) {
+        if (ports_seen==0) { print; ports_seen=1; next }
+        else next
+      }
+      if ($0 ~ /^  [a-zA-Z0-9_-]+:/) { ports_seen=0 }
+      print
+    }
+  ' "${COMPOSE_FILE}" > "${COMPOSE_FILE}.tmp_cleanports"
+  sudo mv "${COMPOSE_FILE}.tmp_cleanports" "${COMPOSE_FILE}"
+  echo "   ✅ Duplicações de 'ports:' removidas com sucesso."
+fi
+
+# ---------------------------------------------------------------
+# 🧩 Corrigir formato 'networks'
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🧩 Corrigindo formato de 'networks:' nos serviços log/harbor-log..."
+  sudo awk '
+    BEGIN {in_log=0; in_hlog=0}
+    /^  log:$/ {in_log=1; print; next}
+    /^  harbor-log:$/ {in_hlog=1; print; next}
+    (in_log || in_hlog) {
+      if ($0 ~ /^    networks:/) {
+        print "    networks:"
+        print "      - harbor"
+        next
+      }
+      if ($0 ~ /^  [a-zA-Z0-9_-]+:/) {in_log=0; in_hlog=0}
+    }
+    {print}
+  ' "${COMPOSE_FILE}" > "${COMPOSE_FILE}.tmp_networksfix"
+  sudo mv "${COMPOSE_FILE}.tmp_networksfix" "${COMPOSE_FILE}"
+  echo "   ✅ Formato de 'networks:' corrigido para array com sucesso."
+fi
+
+# ---------------------------------------------------------------
+# 🧩 Recriar blocos cap_drop/cap_add no formato funcional
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🧩 Recriando blocos cap_drop e cap_add com listas válidas..."
+  sudo sed -i '/^    cap_drop:/,/^    cap_add:/c\    cap_drop:\n      - ALL\n    cap_add:\n      - CHOWN\n      - DAC_OVERRIDE\n      - SETGID\n      - SETUID' "${COMPOSE_FILE}"
+  echo "   ✅ cap_drop/cap_add reconstruídos no formato de lista (compatível com Compose)."
+fi
+
+# ---------------------------------------------------------------
+# 🔎 Conferência visual
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "——— Trecho atual do serviço log/harbor-log ———"
+  nl -ba "${COMPOSE_FILE}" | sed -n '/^ *[0-9]\+  *  log:$/,/^ *[0-9]\+  *  [a-zA-Z0-9_-]\+:$/p'
+  nl -ba "${COMPOSE_FILE}" | sed -n '/^ *[0-9]\+  *  harbor-log:$/,/^ *[0-9]\+  *  [a-zA-Z0-9_-]\+:$/p'
+  echo "———————————————————————————————————————————————"
+fi
+
+# =================================================================
+# 🔗 (ACRÉSCIMO) Rede padrão ngsoc_net – sem remover nada anterior
+# =================================================================
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🌐 Ajustando rede para usar 'ngsoc_net' como rede padrão externa (preservando correções)..."
+
+  # 1) Troca referências explícitas a "- harbor" por "- default" (os serviços passam a usar a rede default)
+  sudo sed -i 's/^\([[:space:]]*\)-[[:space:]]*harbor$/\1- default/' "${COMPOSE_FILE}" || true
+
+  # 2) Remove bloco 'networks:' existente (se houver) para reescrever com default externo
+  #    Obs.: remove somente bloco final (não afeta conteúdos de serviço)
+  awk '
+    BEGIN {innet=0}
+    /^networks:[[:space:]]*$/ {innet=1; next}
+    innet && /^[^[:space:]]/ {innet=0}
+    !innet {print}
+  ' "${COMPOSE_FILE}" | sudo tee "${COMPOSE_FILE}.tmp_netdefault" >/dev/null
+  sudo mv "${COMPOSE_FILE}.tmp_netdefault" "${COMPOSE_FILE}"
+
+  # 3) Acrescenta definição de rede default → ngsoc_net (externa)
+  sudo tee -a "${COMPOSE_FILE}" >/dev/null <<'EOF'
+
+networks:
+  default:
+    external: true
+    name: ngsoc_net
+EOF
+
+  echo "   ✅ Rede default -> ngsoc_net configurada."
+fi
+
+# =================================================================
+# 🗂️ (ACRÉSCIMO) Logs via volume (idempotente) – sem remover nada
+# =================================================================
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🗂️ Garantindo exportação de logs via volume para /opt/ngsoc-deploy/logs/harbor (sem 1514)..."
+
+  # Serviço 'log' já foi reconstruído com o bind, mas reforçamos idempotente:
+  sudo awk -v bind="      - /opt/ngsoc-deploy/logs/harbor/:/var/log/docker/:z" '
+    BEGIN {inlog=0; inv=0; has=0}
+    /^  log:$/ {inlog=1; print; next}
+    inlog && /^    volumes:/ {inv=1; print; next}
+    inlog && inv && $0 ~ /^[[:space:]]*-[[:space:]]*\/opt\/ngsoc-deploy\/logs\/harbor\/:\/var\/log\/docker\/:z/ {has=1}
+    inlog && inv && ($0 ~ /^  [a-zA-Z0-9_-]+:/) { # saiu do bloco do serviço sem achar o bind
+      if (!has) print bind
+      inlog=0; inv=0; has=0
+    }
+    {print}
+    END {
+      # se arquivo terminou ainda dentro de volumes de log
+      if (inlog && inv && !has) print bind
+    }
+  ' "${COMPOSE_FILE}" | sudo tee "${COMPOSE_FILE}.tmp_logbind" >/dev/null
+  sudo mv "${COMPOSE_FILE}.tmp_logbind" "${COMPOSE_FILE}"
+
+  echo "   ✅ Bind de logs garantido no serviço 'log'."
+fi
+
+# ---------------------------------------------------------------
+# 🔚 Conclusão
+# ---------------------------------------------------------------
+echo "=============================================================="
+[[ -f "${INSTALLER_HARBOR_DIR}/docker-compose.yml" ]] \
+  && echo "📄 docker-compose.yml gerado com sucesso em ${INSTALLER_HARBOR_DIR}/docker-compose.yml" \
+  || echo "⚠️ docker-compose.yml não localizado; verifique ${GEN_DIR}"
+
+printf "📁 Itens-chave:\n   - %s\n" \
+  "${CERTS_DIR_COMPAT}/harbor.key" \
+  "${CERTS_DIR_COMPAT}/harbor.crt" \
+  "${SECRETKEY_FILE}" \
+  "${TLS_DIR}/harbor_internal_ca.crt" \
+  "${HARBOR_YML}"
+
+# ---------------------------------------------------------------
+# 🧩 FIX FINAL: corrigir referências residuais à rede 'harbor'
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🧩 Corrigindo serviços que ainda referenciam a rede 'harbor'..."
+
+  # 1️⃣ Corrige o Formato 2 (chave de configuração de rede)
+  sudo sed -i 's/^[[:space:]]*harbor:[[:space:]]*$/    default:/' "${COMPOSE_FILE}" || true
+
+  # 2️⃣ Corrige o Formato 1 (lista)
+  sudo sed -i 's/^[[:space:]]*-[[:space:]]*harbor$/      - default/' "${COMPOSE_FILE}" || true
+
+  # 3️⃣ Remove bloco networks duplicado
+  awk '
+    BEGIN {innet=0}
+    /^networks:[[:space:]]*$/ {innet=1; next}
+    innet && /^[^[:space:]]/ {innet=0}
+    !innet {print}
+  ' "${COMPOSE_FILE}" | sudo tee "${COMPOSE_FILE}.tmp_harborfix" >/dev/null
+  sudo mv "${COMPOSE_FILE}.tmp_harborfix" "${COMPOSE_FILE}"
+
+  # 4️⃣ Garante rede default → ngsoc_net
+  if ! grep -q "name: ngsoc_net" "${COMPOSE_FILE}"; then
+    sudo tee -a "${COMPOSE_FILE}" >/dev/null <<'EOF'
+
+networks:
+  default:
+    external: true
+    name: ngsoc_net
+EOF
+  fi
+
+  echo "   ✅ Todas as referências à rede 'harbor' foram substituídas por 'ngsoc_net'."
+fi
+
+# ---------------------------------------------------------------
+# 🧩 FIX EXTRA: garantir que 'networks:' de todos os serviços use formato de lista
+# ---------------------------------------------------------------
+if [[ -f "${COMPOSE_FILE}" ]]; then
+  echo "🧩 Normalizando formato de 'networks:' para lista em todos os serviços..."
+
+  sudo awk '
+    BEGIN {in_service=0; in_net=0}
+    /^  [a-zA-Z0-9_-]+:$/ {in_service=1; in_net=0; print; next}
+    in_service && /^    networks:$/ {in_net=1; print; next}
+    in_net && /^      [a-zA-Z0-9_-]+:$/ {
+      sub(/^[[:space:]]*[a-zA-Z0-9_-]+:/,"      - default",$0)
+      in_net=0
+    }
+    {print}
+  ' "${COMPOSE_FILE}" | sudo tee "${COMPOSE_FILE}.tmp_netarray" >/dev/null
+  sudo mv "${COMPOSE_FILE}.tmp_netarray" "${COMPOSE_FILE}"
+
+  echo "   ✅ Todos os serviços usam formato de lista para 'networks:'."
+fi
+
+echo "=============================================================="
+echo "🎯 FIX-PREPARE FINAL UNIVERSAL — CONCLUÍDO."
+echo "=============================================================="
+
+
+echo "=============================================================="
+echo "🎯 FIX-PREPARE FINAL UNIVERSAL — CONCLUÍDO."
+echo "=============================================================="

@@ -1,0 +1,209 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPTS_PATH="/opt/ngsoc-deploy/scripts"
+WIDTH=90
+HEIGHT=35
+
+# ===============================
+# Tela de boas-vindas
+# ===============================
+show_welcome() {
+    NGSOC_ASCII=$(figlet -f big "NGSOC" 2>/dev/null || echo "NGSOC")
+    POSITIVOS_ASCII=$(figlet -f small "POSITIVOS+" 2>/dev/null || echo "POSITIVOS+")
+
+    center_text() {
+        local line="$1"
+        local len=${#line}
+        local pad=$(( (WIDTH - len) / 2 ))
+        [ "$pad" -lt 0 ] && pad=0
+        printf "%*s%s\n" "$pad" "" "$line"
+    }
+
+    CENTERED_ASCII=$(echo "$NGSOC_ASCII" | while IFS= read -r line; do center_text "$line"; done)
+    CENTERED_POSITIVOS=$(echo "$POSITIVOS_ASCII" | while IFS= read -r line; do center_text "$line"; done)
+
+    WELCOME_MSG="Bem-vindo ao NGSOC - Suporte Técnico\nDiagnóstico, Recuperação e Reinstalação Segura."
+    CENTERED_MSG=$(echo -e "$WELCOME_MSG" | while IFS= read -r line; do center_text "$line"; done)
+
+    LINE_LARGE=$(printf '=%.0s' $(seq 1 $WIDTH))
+    LINE_MEDIUM=$(printf -- '-%.0s' $(seq 1 $((WIDTH/2))))
+    FOOTER="© 2025 POSITIVOS+. Todos os direitos reservados. Licença: MIT"
+
+    MSG="${CENTERED_ASCII}\n${CENTERED_POSITIVOS}\n${LINE_LARGE}\n${CENTERED_MSG}\n${LINE_MEDIUM}\n${FOOTER}"
+
+    whiptail --title "NGSOC - Suporte" --msgbox "$MSG" $HEIGHT $WIDTH --ok-button "INICIAR"
+}
+
+# ===============================
+# Menu Principal
+# ===============================
+main_menu() {
+    while true; do
+        CHOICE=$(whiptail --title "NGSOC - Suporte" --menu "Escolha uma opção" $HEIGHT $WIDTH 8 \
+            "1" "Diagnóstico" \
+            "2" "Recuperação" \
+            "3" "Reinstalação" \
+            "0" "Sair" 3>&1 1>&2 2>&3)
+
+        case "$CHOICE" in
+            1) diagnostico_menu ;;
+            2) recuperacao_menu ;;
+            3) reinstalacao_menu ;;
+            0) exit 0 ;;
+            *) whiptail --msgbox "Opção inválida." 8 40 ;;
+        esac
+    done
+}
+
+# ===============================
+# Diagnóstico (novo formato)
+# ===============================
+diagnostico_menu() {
+    while true; do
+        CHOICE=$(whiptail --title "Diagnóstico" --menu "Selecione o componente" 20 78 10 \
+            "1" "Wazuh" \
+            "2" "Harbor" \
+            "3" "Metasploit" \
+            "4" "OpenVAS" \
+            "5" "Trivy" \
+            "6" "ZAP" \
+            "7" "MongoDB" \
+            "0" "Voltar" 3>&1 1>&2 2>&3)
+
+        case "$CHOICE" in
+            1) diagnostico_componente "Wazuh" ;;
+            2) diagnostico_componente "Harbor" ;;
+            3) diagnostico_componente "Metasploit" ;;
+            4) diagnostico_componente "OpenVAS" ;;
+            5) diagnostico_componente "Trivy" ;;
+            6) diagnostico_componente "ZAP" ;;
+            7) diagnostico_componente "MongoDB" ;;
+            0) break ;;
+        esac
+    done
+}
+
+diagnostico_componente() {
+    local COMP="$1"
+    while true; do
+        CHOICE=$(whiptail --title "Diagnóstico - $COMP" --menu "Selecione uma ação" 20 78 8 \
+            "1" "Readme" \
+            "2" "Status Service" \
+            "3" "Check Logs (últimos 15)" \
+            "0" "Voltar" 3>&1 1>&2 2>&3)
+
+        case "$CHOICE" in
+            1)
+                whiptail --msgbox "$COMP - Exibir README (em construção...)" 8 60
+                ;;
+            2)
+                whiptail --msgbox "$COMP - Verificar status do serviço (em construção...)" 8 60
+                ;;
+            3)
+                whiptail --msgbox "$COMP - Exibir últimos 15 logs (em construção...)" 8 60
+                ;;
+            0) break ;;
+        esac
+    done
+}
+
+# ===============================
+# Recuperação
+# ===============================
+recuperacao_menu() {
+    while true; do
+        CHOICE=$(whiptail --title "Recuperação" --menu "Escolha o componente" 20 78 10 \
+            "1" "Wazuh" \
+            "2" "Harbor" \
+            "3" "Metasploit" \
+            "4" "OpenVAS" \
+            "5" "Trivy" \
+            "6" "ZAP" \
+            "7" "MongoDB" \
+            "0" "Voltar" 3>&1 1>&2 2>&3)
+
+        case "$CHOICE" in
+            1) recuperacao_componente "Wazuh" ;;
+            2) recuperacao_componente "Harbor" ;;
+            3) recuperacao_componente "Metasploit" ;;
+            4) recuperacao_componente "OpenVAS" ;;
+            5) recuperacao_componente "Trivy" ;;
+            6) recuperacao_componente "ZAP" ;;
+            7) recuperacao_componente "MongoDB" ;;
+            0) break ;;
+        esac
+    done
+}
+
+recuperacao_componente() {
+    local COMP="$1"
+    while true; do
+        CHOICE=$(whiptail --title "Recuperação - $COMP" --menu "Escolha uma ação" 20 78 8 \
+            "1" "Restart" \
+            "2" "Status Services" \
+            "0" "Voltar" 3>&1 1>&2 2>&3)
+
+        case "$CHOICE" in
+            1) whiptail --msgbox "Executando Restart de $COMP (em construção...)" 8 60 ;;
+            2) whiptail --msgbox "Exibindo Status de $COMP (em construção...)" 8 60 ;;
+            0) break ;;
+        esac
+    done
+}
+
+# ===============================
+# Reinstalação
+# ===============================
+reinstalacao_menu() {
+    while true; do
+        CHOICE=$(whiptail --title "Reinstalação" --menu "Escolha o componente" 20 78 10 \
+            "1" "Reinstalar Wazuh" \
+            "2" "Reinstalar Harbor" \
+            "3" "Reinstalar Metasploit" \
+            "4" "Reinstalar OpenVAS" \
+            "5" "Reinstalar Trivy" \
+            "6" "Reinstalar ZAP" \
+            "7" "Reinstalar MongoDB" \
+            "0" "Voltar" 3>&1 1>&2 2>&3)
+
+        case "$CHOICE" in
+            1) reinstalar_componente "Wazuh" ;;
+            2) reinstalar_componente "Harbor" ;;
+            3) reinstalar_componente "Metasploit" ;;
+            4) reinstalar_componente "OpenVAS" ;;
+            5) reinstalar_componente "Trivy" ;;
+            6) reinstalar_componente "ZAP" ;;
+            7) reinstalar_componente "MongoDB" ;;
+            0) break ;;
+        esac
+    done
+}
+
+reinstalar_componente() {
+    local COMP="$1"
+    while true; do
+        CHOICE=$(whiptail --title "Reinstalação - $COMP" --menu "Escolha uma ação" 20 78 10 \
+            "1" "Parar e remover containers" \
+            "2" "Remover volumes temporários" \
+            "3" "Executar Instalação" \
+            "4" "Status do Serviço" \
+            "5" "Registrar logs da ação" \
+            "0" "Voltar" 3>&1 1>&2 2>&3)
+
+        case "$CHOICE" in
+            1) whiptail --msgbox "$COMP: Parar e remover containers (em construção...)" 8 60 ;;
+            2) whiptail --msgbox "$COMP: Remover volumes temporários (em construção...)" 8 60 ;;
+            3) whiptail --msgbox "$COMP: Executar Instalação (em construção...)" 8 60 ;;
+            4) whiptail --msgbox "$COMP: Status do Serviço (em construção...)" 8 60 ;;
+            5) whiptail --msgbox "$COMP: Registrar logs da ação (em construção...)" 8 60 ;;
+            0) break ;;
+        esac
+    done
+}
+
+# ===============================
+# Execução principal
+# ===============================
+show_welcome
+main_menu

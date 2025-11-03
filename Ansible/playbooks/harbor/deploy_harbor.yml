@@ -1,0 +1,47 @@
+---
+- name: Deploy do Harbor (idempotente)
+  hosts: localhost
+  connection: local
+  become: true
+  vars:
+    installer_path: /opt/ngsoc-deploy/data/harbor/installer/harbor
+    wait_port: 8443
+    wait_timeout: 180
+
+  tasks:
+    - name: Garantir diretório do installer existe
+      file:
+        path: "{{ installer_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Verificar docker-compose.yml gerado
+      stat:
+        path: "{{ installer_path }}/docker-compose.yml"
+      register: compose_file
+
+    - name: Subir Harbor (quando docker-compose existir)
+      when: compose_file.stat.exists
+      community.docker.docker_compose:
+        project_src: "{{ installer_path }}"
+        state: present
+        restarted: false
+        remove_orphans: false
+
+    - name: Aguardar porta HTTPS do Harbor
+      wait_for:
+        host: 127.0.0.1
+        port: "{{ wait_port }}"
+        timeout: "{{ wait_timeout }}"
+        state: started
+      register: wait_result
+      failed_when: wait_result is failed
+
+    - name: Exibir containers do Harbor
+      shell: docker ps --filter "name=harbor" --format "table {{'NAME'}}\t{{'STATUS'}}"
+      register: harbor_containers
+      changed_when: false
+
+    - name: Mostrar containers
+      debug:
+        msg: "{{ harbor_containers.stdout_lines }}"

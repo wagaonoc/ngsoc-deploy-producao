@@ -18,8 +18,6 @@ services:
       - type: bind
         source: ./common/config/log/rsyslog_docker.conf
         target: /etc/rsyslog.d/rsyslog_docker.conf
-    ports:
-      - "127.0.0.1:10514:10514"
     networks:
       - harbor
   registry:
@@ -48,7 +46,7 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "registry"
   registryctl:
     image: goharbor/harbor-registryctl:v2.14.0
@@ -78,7 +76,7 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "registryctl"
   postgresql:
     image: goharbor/harbor-db:v2.14.0
@@ -102,7 +100,7 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "postgresql"
     shm_size: '1gb'
   core:
@@ -142,7 +140,7 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "core"
   portal:
     image: goharbor/harbor-portal:v2.14.0
@@ -166,7 +164,7 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "portal"
 
   jobservice:
@@ -192,23 +190,12 @@ services:
     networks:
       - harbor
     depends_on:
-      core:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      postgresql:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:8080/ > /dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 30s
+      - core
     logging:
       driver: "syslog"
       options:
+        syslog-address: "tcp://localhost:1514"
         tag: "jobservice"
-
   redis:
     image: goharbor/redis-photon:v2.14.0
     container_name: redis
@@ -228,11 +215,14 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "redis"
   proxy:
     image: goharbor/nginx-photon:v2.14.0
     container_name: nginx
+    ports:
+      - "8443:8443"
+      - "8081:8080"
     restart: always
     cap_drop:
       - ALL
@@ -249,9 +239,6 @@ services:
         target: /harbor_cust_cert
     networks:
       - harbor
-    ports:
-      - 8081:8080
-      - 8443:8443
     depends_on:
       - registry
       - core
@@ -260,7 +247,7 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "proxy"
   trivy-adapter:
     container_name: trivy-adapter
@@ -286,7 +273,7 @@ services:
     logging:
       driver: "syslog"
       options:
-#         syslog-address: "tcp://localhost:1514"
+        syslog-address: "tcp://localhost:1514"
         tag: "trivy-adapter"
     env_file:
       ./common/config/trivy-adapter/env

@@ -1,0 +1,35 @@
+hostname: harbor.local
+http:
+  port: 8081
+https:
+  port: 8443
+  certificate: /etc/ssl/certs/nginx-selfsigned.crt
+  private_key: /etc/ssl/private/nginx-selfsigned.key
+harbor_admin_password: "Harbor12345"
+data_volume: /opt/ngsoc-deploy/data/harbor/data
+log:
+  level: info
+  local:
+    location: /opt/ngsoc-deploy/logs/harbor
+  syslog:
+    port: 0          # 🔒 NÃO usar 1514 (Wazuh)
+    protocol: tcp
+  external_endpoint: ""
+database:
+  password: "HarborDBpass"
+trivy:
+  server_url: "http://trivy-server:4954"
+jobservice:
+  max_job_workers: 10
+  logger_sweeper_duration: 1
+  job_loggers:
+    - name: "FILE"
+      level: "INFO"
+      settings:
+        base_dir: "/var/log/jobs"
+        rotate_count: 50
+        rotate_size: 200M
+        compress: true
+notification:
+  webhook_job_max_retry: 3
+  webhook_job_http_client_timeout: 30s

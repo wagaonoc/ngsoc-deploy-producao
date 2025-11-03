@@ -1,0 +1,137 @@
+---
+- name: Deploy Trivy (Server RPC mode)
+  hosts: localhost
+  gather_facts: yes
+  vars:
+    trivy_container_name: ngsoc_trivy
+    trivy_image: aquasec/trivy:0.44.1
+    trivy_server_port: 4954
+    trivy_data_dir: /opt/ngsoc-deploy/data/trivy
+    trivy_logs_dir: /opt/ngsoc-deploy/logs/trivy
+    trivy_reports_dir: /opt/ngsoc-deploy/reports/trivy
+    trivy_proxy_conf_dir: /opt/ngsoc-deploy/data/trivy-proxy/nginx-conf
+    trivy_proxy_auth_dir: /opt/ngsoc-deploy/data/trivy-proxy/nginx-auth
+
+  tasks:
+
+    - name: Ensure required directories exist
+      file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - "{{ trivy_data_dir }}"
+        - "{{ trivy_logs_dir }}"
+        - "{{ trivy_reports_dir }}"
+        - "{{ trivy_proxy_conf_dir }}"
+        - "{{ trivy_proxy_auth_dir }}"
+
+    # ==========================================================
+    # 🧩 Correção definitiva de logs (host e container)
+    # ==========================================================
+    - name: Ensure /var/log/trivy exists on host (Rsyslog/Wazuh integration)
+      file:
+        path: /var/log/trivy
+        state: directory
+        owner: syslog
+        group: adm
+        mode: '0750'
+
+    - name: Remove existing Trivy container (if any)
+      community.docker.docker_container:
+        name: "{{ trivy_container_name }}"
+        state: absent
+
+    - name: Pull latest Trivy image
+      community.docker.docker_image:
+        name: "{{ trivy_image }}"
+        source: pull
+
+    - name: Run Trivy container in Server mode
+      community.docker.docker_container:
+        name: "{{ trivy_container_name }}"
+        image: "{{ trivy_image }}"
+        state: started
+        restart_policy: unless-stopped
+        ports:
+          - "{{ trivy_server_port }}:4954"
+        volumes:
+          - "{{ trivy_data_dir }}:/root/.cache"
+          - "{{ trivy_logs_dir }}:/var/log/trivy"
+          - "{{ trivy_reports_dir }}:/trivy/reports"
+        command: "sh -c 'mkdir -p /var/log/trivy && trivy server --debug'"
+        log_driver: "json-file"
+        log_options:
+          max-size: "50m"
+          max-file: "3"
+
+    - name: Short pause to ensure Trivy container is initialized
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Download Trivy vulnerability DB (manual trigger inside container)
+      ansible.builtin.command: "docker exec {{ trivy_container_name }} trivy image --download-db-only"
+      ignore_errors: yes
+
+    - name: Create README with operational details
+      copy:
+        dest: /opt/ngsoc-deploy/docs/trivy/README.txt
+        content: |
+          ==========================================================
+          NG-SOC - Trivy Deployment Summary
+          ==========================================================
+          Container       : {{ trivy_container_name }}
+          Mode            : Server (RPC - API)
+          Image           : {{ trivy_image }}
+          Server Port     : {{ trivy_server_port }}
+          Access URL      : http://<IP_DO_SERVIDOR>:{{ trivy_server_port }}
+          ----------------------------------------------------------
+          Paths
+          ----------------------------------------------------------
+          Data (cache)    : {{ trivy_data_dir }}
+          Logs (host)     : {{ trivy_logs_dir }}
+          Logs (container): /var/log/trivy/trivy-server.log
+          Reports         : {{ trivy_reports_dir }}
+          Proxy Conf      : {{ trivy_proxy_conf_dir }}
+          Proxy Auth      : {{ trivy_proxy_auth_dir }}
+          ----------------------------------------------------------
+          Integration Notes
+          ----------------------------------------------------------
+          - Rsyslog lê: /opt/ngsoc-deploy/logs/trivy/trivy-server.log
+          - Permissões: syslog:adm (750)
+          - Container cria automaticamente /var/log/trivy
+          ----------------------------------------------------------
+          Network and Ports
+          ----------------------------------------------------------
+          - Trivy Server RPC Port : 4954/tcp
+          - Log Path (rsyslog)    : /var/log/trivy/trivy-server.log
+          ----------------------------------------------------------
+          Basic Operations
+          ----------------------------------------------------------
+          - Health check:
+            curl http://localhost:{{ trivy_server_port }}/health
+
+          - Run image scan (client mode):
+            docker exec -it {{ trivy_container_name }} \
+              trivy image alpine:3.18
+
+          - Update DB:
+            docker exec -it {{ trivy_container_name }} \
+              trivy image --download-db-only
+          ==========================================================
+
+    - name: Display Trivy deployment summary
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          ✅ TRIVY DEPLOYMENT COMPLETE
+          ==========================================================
+          Container Name  : {{ trivy_container_name }}
+          Mode            : Server (RPC)
+          Image           : {{ trivy_image }}
+          API Port        : {{ trivy_server_port }}
+          Access URL      : http://<IP_DO_SERVIDOR>:{{ trivy_server_port }}
+          Data Dir        : {{ trivy_data_dir }}
+          Logs Dir        : {{ trivy_logs_dir }}
+          Reports Dir     : {{ trivy_reports_dir }}
+          ==========================================================

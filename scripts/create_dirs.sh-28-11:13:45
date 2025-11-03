@@ -23,16 +23,6 @@ for d in "${DIRS_MAIN[@]}"; do
   sudo mkdir -p "$d"
 done
 
-# === Diretório de suporte técnico (novo) ===
-SUPORTE_LOG_DIR="/var/log/ngsoc-suporte"
-if [ ! -d "$SUPORTE_LOG_DIR" ]; then
-  sudo mkdir -p "$SUPORTE_LOG_DIR"
-  sudo chmod 777 "$SUPORTE_LOG_DIR"
-  log "Diretório de suporte criado: $SUPORTE_LOG_DIR"
-else
-  log "Diretório de suporte já existe: $SUPORTE_LOG_DIR"
-fi
-
 # === Donos e permissões específicas (conforme auditoria real) ===
 
 # --- DATA ---

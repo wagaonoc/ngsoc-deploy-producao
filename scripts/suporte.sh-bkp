@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPTS_PATH="/opt/ngsoc-deploy/scripts"
+WIDTH=90
+HEIGHT=35
+
+# ===============================
+# Tela de boas-vindas
+# ===============================
+show_welcome() {
+    clear
+    NGSOC_ASCII=$(figlet -f big "NGSOC" 2>/dev/null || echo "NGSOC")
+    POSITIVOS_ASCII=$(figlet -f small "POSITIVOS+" 2>/dev/null || echo "POSITIVOS+")
+
+    center_text() {
+        local line="$1"
+        local len=${#line}
+        local pad=$(( (WIDTH - len) / 2 ))
+        [ "$pad" -lt 0 ] && pad=0
+        printf "%*s%s\n" "$pad" "" "$line"
+    }
+
+    CENTERED_ASCII=$(echo "$NGSOC_ASCII" | while IFS= read -r line; do center_text "$line"; done)
+    CENTERED_POSITIVOS=$(echo "$POSITIVOS_ASCII" | while IFS= read -r line; do center_text "$line"; done)
+
+    WELCOME_MSG="Bem-vindo ao NGSOC - Suporte Técnico\nDiagnóstico, Recuperação e Reinstalação Segura."
+    CENTERED_MSG=$(echo -e "$WELCOME_MSG" | while IFS= read -r line; do center_text "$line"; done)
+
+    LINE_LARGE=$(printf '=%.0s' $(seq 1 $WIDTH))
+    FOOTER="© 2025 POSITIVOS+. Todos os direitos reservados. Licença: MIT"
+
+    MSG="${CENTERED_ASCII}\n${CENTERED_POSITIVOS}\n${LINE_LARGE}\n${CENTERED_MSG}\n${FOOTER}"
+
+    (whiptail --title "NGSOC - Suporte" --msgbox "$MSG" $HEIGHT $WIDTH --ok-button "INICIAR") < /dev/tty > /dev/tty 2>&1
+}
+
+# ===============================
+# Menu Principal
+# ===============================
+main_menu() {
+    while true; do
+        CHOICE=$( (whiptail --title "NGSOC - Suporte" --menu "Escolha uma opção" $HEIGHT $WIDTH 8 \
+            "1" "Diagnóstico" \
+            "2" "Recuperação" \
+            "3" "Reinstalação" \
+            "0" "Sair" 3>&1 1>&2 2>&3) < /dev/tty)
+        case "$CHOICE" in
+            1) diagnostico_menu ;;
+            2) recuperacao_menu ;;
+            3) reinstalacao_menu ;;
+            0) clear; exit 0 ;;
+        esac
+    done
+}
+
+# ===============================
+# Diagnóstico
+# ===============================
+diagnostico_menu() {
+    while true; do
+        CHOICE=$( (whiptail --title "Diagnóstico" --menu "Selecione o componente" 20 78 10 \
+            "1" "Wazuh" \
+            "2" "Harbor" \
+            "3" "Metasploit" \
+            "4" "OpenVAS" \
+            "5" "Trivy" \
+            "6" "ZAP" \
+            "7" "MongoDB" \
+            "0" "Voltar" 3>&1 1>&2 2>&3) < /dev/tty )
+        case "$CHOICE" in
+            1) diagnostico_wazuh ;;
+            0) break ;;
+        esac
+    done
+}
+
+# ===============================
+# Diagnóstico Wazuh (corrigido)
+# ===============================
+diagnostico_wazuh() {
+    local README_PATH="/opt/ngsoc-deploy/docs/wazuh/README.txt"
+    local LOG_FILE="/var/ossec/logs/ossec.log"
+    local SUPORTE_LOG="/var/log/ngsoc-suporte/suporte.log"
+    local SERVICES=("wazuh-manager" "wazuh-indexer" "wazuh-dashboard")
+
+    while true; do
+        CHOICE=$( (whiptail --title "Diagnóstico - Wazuh" --menu "Selecione uma ação" 20 78 8 \
+            "1" "Readme" \
+            "2" "Status Service" \
+            "3" "Check Logs (últimos 15)" \
+            "0" "Voltar" 3>&1 1>&2 2>&3) < /dev/tty )
+
+        case "$CHOICE" in
+            # ========== READ ME ==========
+            1)
+                if [ -f "$README_PATH" ]; then
+                    (set +e; whiptail --title "Wazuh - README" --scrolltext --textbox "$README_PATH" 25 90 < /dev/tty > /dev/tty 2>&1; set -e)
+                else
+                    (set +e; whiptail --msgbox "Arquivo README não encontrado:\n$README_PATH" 10 70 < /dev/tty > /dev/tty 2>&1; set -e)
+                fi
+                ;;
+            # ========== STATUS ==========
+            2)
+                local TMP_STATUS
+                TMP_STATUS=$(mktemp)
+                {
+                    echo "Status dos serviços do Wazuh"
+                    echo "======================================="
+                    for svc in "${SERVICES[@]}"; do
+                        if systemctl is-active --quiet "$svc"; then
+                            echo "✅ $svc: ATIVO"
+                        else
+                            echo "❌ $svc: INATIVO"
+                        fi
+                    done
+                    echo "---------------------------------------"
+                    echo "Verificado em: $(date '+%Y-%m-%d %H:%M:%S')"
+                } > "$TMP_STATUS"
+
+                (set +e; whiptail --title "Wazuh - Status dos Serviços" --scrolltext --textbox "$TMP_STATUS" 20 80 < /dev/tty > /dev/tty 2>&1; set -e)
+                rm -f "$TMP_STATUS"
+                ;;
+            # ========== CHECK LOGS ==========
+            3)
+                if [ -f "$LOG_FILE" ]; then
+                    local TMP_LOG
+                    TMP_LOG=$(mktemp)
+                    {
+                        echo "==== Últimos 15 eventos do Wazuh ===="
+                        echo "Gerado em: $(date '+%Y-%m-%d %H:%M:%S')"
+                        echo "--------------------------------------"
+                        tail -n 15 "$LOG_FILE"
+                        echo "--------------------------------------"
+                    } > "$TMP_LOG"
+
+                    # evitar crash no retorno
+                    (set +e; whiptail --title "Wazuh - Últimos Logs" --scrolltext --textbox "$TMP_LOG" 25 90 < /dev/tty > /dev/tty 2>&1; set -e)
+
+                    # Registrar logs no suporte.log
+                    {
+                        echo "[ $(date '+%Y-%m-%d %H:%M:%S') ] === CHECK LOGS: Wazuh ==="
+                        cat "$TMP_LOG"
+                        echo
+                    } >> "$SUPORTE_LOG"
+
+                    rm -f "$TMP_LOG"
+                else
+                    (set +e; whiptail --msgbox "Arquivo de log não encontrado:\n$LOG_FILE" 10 70 < /dev/tty > /dev/tty 2>&1; set -e)
+                fi
+                ;;
+            0) break ;;
+        esac
+    done
+}
+
+# ===============================
+# Recuperação
+# ===============================
+recuperacao_menu() {
+    while true; do
+        CHOICE=$( (whiptail --title "Recuperação" --menu "Escolha o componente" 20 78 10 \
+            "1" "Wazuh" \
+            "0" "Voltar" 3>&1 1>&2 2>&3) < /dev/tty)
+        case "$CHOICE" in
+            1) (set +e; whiptail --msgbox "Recuperação de Wazuh ainda não implementada." 8 60 < /dev/tty > /dev/tty 2>&1; set -e) ;;
+            0) break ;;
+        esac
+    done
+}
+
+# ===============================
+# Reinstalação
+# ===============================
+reinstalacao_menu() {
+    while true; do
+        CHOICE=$( (whiptail --title "Reinstalação" --menu "Escolha o componente" 20 78 10 \
+            "1" "Reinstalar Wazuh" \
+            "0" "Voltar" 3>&1 1>&2 2>&3) < /dev/tty)
+        case "$CHOICE" in
+            1) (set +e; whiptail --msgbox "Rotina de reinstalação de Wazuh ainda não implementada." 8 60 < /dev/tty > /dev/tty 2>&1; set -e) ;;
+            0) break ;;
+        esac
+    done
+}
+
+# ===============================
+# Execução principal
+# ===============================
+show_welcome
+main_menu

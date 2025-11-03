@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
 SCRIPTS_PATH="/opt/ngsoc-deploy/scripts"
@@ -9,43 +9,31 @@ HEIGHT=35
 # Tela de boas-vindas
 # ===============================
 show_welcome() {
-    # tenta figlet, senão usa texto simples
     NGSOC_ASCII=$(figlet -f big "NGSOC" 2>/dev/null || echo "NGSOC")
     POSITIVOS_ASCII=$(figlet -f small "POSITIVOS+" 2>/dev/null || echo "POSITIVOS+")
 
     center_text() {
         local line="$1"
-        local line_len=${#line}
-        local pad=$(( (WIDTH - line_len) / 2 ))
-        if [ "$pad" -lt 0 ]; then pad=0; fi
-        printf "%*s%s\n" "$pad" "" "$line"
+        local len=${#line}
+        local pad=$(( (WIDTH - len) / 2 ))
+        printf "%*s%s\n" $pad "" "$line"
     }
 
-    CENTERED_ASCII=""
-    while IFS= read -r l; do
-        CENTERED_ASCII+=$(center_text "$l")$'\n'
-    done <<< "$NGSOC_ASCII"
-
-    CENTERED_POSITIVOS=""
-    while IFS= read -r l; do
-        CENTERED_POSITIVOS+=$(center_text "$l")$'\n'
-    done <<< "$POSITIVOS_ASCII"
+    CENTERED_ASCII=$(echo "$NGSOC_ASCII" | while IFS= read -r line; do center_text "$line"; done)
+    CENTERED_POSITIVOS=$(echo "$POSITIVOS_ASCII" | while IFS= read -r line; do center_text "$line"; done)
 
     WELCOME_MSG="Bem-vindo ao NGSOC - OpenSource SOC\nConfigure e gerencie suas ferramentas de monitoramento e pentest."
-    CENTERED_MSG=""
-    while IFS= read -r l; do
-        CENTERED_MSG+=$(center_text "$l")$'\n'
-    done <<< "$(echo -e "$WELCOME_MSG")"
+    CENTERED_MSG=$(echo -e "$WELCOME_MSG" | while IFS= read -r line; do center_text "$line"; done)
 
-    LINE_LARGE=$(printf '=%.0s' $(seq 1 "$WIDTH"))
+    LINE_LARGE=$(printf '=%.0s' $(seq 1 $WIDTH))
     LINE_MEDIUM=$(printf -- '-%.0s' $(seq 1 $((WIDTH/2))))
     LINE_SMALL=$(printf -- '.%.0s' $(seq 1 $((WIDTH/4))))
 
     FOOTER="© 2025 POSITIVOS+. Todos os direitos reservados. Licença: MIT"
 
-    ASCII_ART="${CENTERED_ASCII}${CENTERED_POSITIVOS}${LINE_LARGE}\n${CENTERED_MSG}${LINE_MEDIUM}\n${LINE_SMALL}\n${FOOTER}"
+    ASCII_ART="$CENTERED_ASCII\n$CENTERED_POSITIVOS\n$LINE_LARGE\n$CENTERED_MSG\n$LINE_MEDIUM\n$LINE_SMALL\n$FOOTER"
 
-    whiptail --title "NGSOC - Bem-vindo" --msgbox "$ASCII_ART" "$HEIGHT" "$WIDTH" --ok-button "INICIAR"
+    whiptail --title "NGSOC - Bem-vindo" --msgbox "$ASCII_ART" $HEIGHT $WIDTH --ok-button "INICIAR"
 }
 
 # ===============================
@@ -53,16 +41,20 @@ show_welcome() {
 # ===============================
 main_menu() {
     while true; do
-        CHOICE=$(whiptail --title "NGSOC - Menu Principal" --menu "Escolha uma opção" "$HEIGHT" "$WIDTH" 10 \
+        CHOICE=$(whiptail --title "NGSOC - Menu Principal" --menu "Escolha uma opção" $HEIGHT $WIDTH 12 \
             "1" "Pré-requisitos" \
             "2" "Implantação" \
             "3" "Gestão" \
+            "4" "Portais" \
+            "5" "Estrutura de diretórios" \
             "0" "Sair" 3>&1 1>&2 2>&3)
 
-        case "$CHOICE" in
+        case $CHOICE in
             1) prerequisites_menu ;;
             2) deployment_menu ;;
             3) gestion_menu ;;
+            4) portals_menu ;;
+            5) directory_structure ;;
             0) exit 0 ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
@@ -82,7 +74,7 @@ prerequisites_menu() {
             "5" "Instalar Ansible" \
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
-        case "$CHOICE" in
+        case $CHOICE in
             1)
                 bash "$SCRIPTS_PATH/create_dirs.sh"
                 if [ $? -eq 0 ]; then
@@ -113,26 +105,24 @@ prerequisites_menu() {
 # ===============================
 deployment_menu() {
     while true; do
-        CHOICE=$(whiptail --title "Implantação" --menu "Escolha um componente para instalar" 20 78 11 \
+        CHOICE=$(whiptail --title "Implantação" --menu "Escolha um componente para instalar" 20 78 10 \
             "1" "Wazuh" \
             "2" "OpenVAS / GVM" \
             "3" "MITMProxy" \
             "4" "Trivy" \
-            "5" "Metasploit" \
-            "6" "MongoDB" \
-            "7" "Harbor" \
-            "8" "OWASP ZAP" \
+            "5" "MongoDB" \
+            "6" "Harbor" \
+            "7" "OWASP ZAP" \
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
-        case "$CHOICE" in
-            1) bash "$SCRIPTS_PATH/install_wazuh_allinone.sh" ;;
-            2) bash "$SCRIPTS_PATH/install_openvas_docker.sh" ;;
+        case $CHOICE in
+            1) bash "$SCRIPTS_PATH/install_wazuh_full.sh" ;;
+            2) bash "$SCRIPTS_PATH/install_openvas_docker.sh-testar" ;;
             3) bash "$SCRIPTS_PATH/install_mitmproxy_docker.sh" ;;
             4) bash "$SCRIPTS_PATH/install_trivy_docker.sh" ;;
-            5) bash "$SCRIPTS_PATH/install_metasploit_docker.sh" ;;
-            6) bash "$SCRIPTS_PATH/install_mongodb_docker.sh" ;;
-            7) bash "$SCRIPTS_PATH/install_harbor_docker.sh" ;;
-            8) bash "$SCRIPTS_PATH/install_zap_docker.sh" ;;
+            5) bash "$SCRIPTS_PATH/install_mongodb_docker.sh" ;;
+            6) bash "$SCRIPTS_PATH/install_harbor.sh" ;;
+            7) bash "$SCRIPTS_PATH/install_zap_docker.sh" ;;
             0) break ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
@@ -140,24 +130,20 @@ deployment_menu() {
 }
 
 # ===============================
-# Gestão (agora inclui Portais e Estrutura de Diretórios)
+# Gestão
 # ===============================
 gestion_menu() {
     while true; do
-        CHOICE=$(whiptail --title "Gestão" --menu "Escolha uma opção" 22 78 14 \
+        CHOICE=$(whiptail --title "Gestão" --menu "Escolha uma opção" 20 78 12 \
             "1" "Status Serviços e Containers" \
             "2" "Restart Wazuh" \
             "3" "Restart Containers por Componente" \
-            "4" "Portais (abrir URLs)" \
-            "5" "Estrutura de Diretórios (visual)" \
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
-        case "$CHOICE" in
+        case $CHOICE in
             1) show_status ;;
             2) restart_wazuh ;;
             3) restart_containers_menu ;;
-            4) portals_menu ;;            # movido para cá
-            5) directory_structure ;;     # movido para cá
             0) break ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
@@ -176,7 +162,7 @@ show_status() {
     {
         echo "==== WAZUH Services ===="
         for svc in wazuh-manager wazuh-indexer wazuh-dashboard; do
-            if systemctl is-active --quiet "${svc}.service" 2>/dev/null; then
+            if systemctl is-active --quiet "$svc"; then
                 printf "  [%s] ✅ UP\n" "$svc"
             else
                 printf "  [%s] ❌ DOWN\n" "$svc"
@@ -186,17 +172,16 @@ show_status() {
     } > "$STATUS_TEXT"
 
     declare -A TOOLS
-    TOOLS["OpenVAS"]="gvm|openvas|greenbone"
-    TOOLS["MITMProxy"]="mitmproxy|ngsoc_mitmproxy"
-    TOOLS["Trivy"]="trivy|ngsoc_trivy"
-    TOOLS["MongoDB"]="mongo|mongodb|msf-db"
-    TOOLS["Harbor"]="harbor|registry|harbor-core|harbor-db|harbor-portal|harbor-jobservice|redis"
-    TOOLS["OWASP ZAP"]="zap|ngsoc_zap"
-    TOOLS["Metasploit"]="metasploit|msf|ngsoc_metasploit"
+    TOOLS["OpenVAS"]="greenbone-community|gvm-official|openvas"
+    TOOLS["MITMProxy"]="ngsoc_mitmproxy|mitmproxy"
+    TOOLS["Trivy"]="ngsoc_trivy|trivy"
+    TOOLS["MongoDB"]="ngsoc_mongodb|mongodb|msf-db"
+    TOOLS["Harbor"]="harbor|registry|registryctl|harbor-core|harbor-db|harbor-log|harbor-portal|harbor-jobservice|redis"
+    TOOLS["OWASP ZAP"]="ngsoc_zap|zap"
 
     DOCKER_LIST=$(docker ps -a --format "{{.Names}}\t{{.Status}}" 2>/dev/null || true)
 
-    for TOOL in OpenVAS MITMProxy Trivy Metasploit MongoDB Harbor "OWASP ZAP"; do
+    for TOOL in OpenVAS MITMProxy Trivy MongoDB Harbor "OWASP ZAP"; do
         pattern="${TOOLS[$TOOL]}"
         echo "==== $TOOL Containers ====" >> "$STATUS_TEXT"
         matches=$(printf "%s\n" "$DOCKER_LIST" | grep -E "$pattern" || true)
@@ -216,7 +201,7 @@ show_status() {
         echo "" >> "$STATUS_TEXT"
     done
 
-    whiptail --title "Status dos Serviços e Containers" --scrolltext --textbox "$STATUS_TEXT" "$H" "$W"
+    whiptail --title "Status dos Serviços e Containers" --scrolltext --textbox "$STATUS_TEXT" $H $W
     rm -f "$STATUS_TEXT"
     return 0
 }
@@ -226,8 +211,8 @@ show_status() {
 # ===============================
 restart_wazuh() {
     for svc in wazuh-manager wazuh-indexer wazuh-dashboard; do
-        if systemctl list-unit-files --type=service | grep -q "^${svc}.service"; then
-            systemctl restart "${svc}.service" || true
+        if systemctl list-unit-files --type=service | grep -q "^$svc"; then
+            systemctl restart "$svc" || true
         fi
     done
     whiptail --msgbox "Serviços Wazuh reiniciados (se existiam)." 8 50
@@ -239,92 +224,37 @@ restart_wazuh() {
 restart_containers_menu() {
     local RESTARTED=false
     while true; do
-        CHOICE=$(whiptail --title "Restart Containers" --menu "Escolha um componente" 20 78 12 \
+        CHOICE=$(whiptail --title "Restart Containers" --menu "Escolha um componente" 20 78 10 \
             "1" "OpenVAS / GVM" \
             "2" "MITMProxy" \
             "3" "Trivy" \
             "4" "MongoDB" \
             "5" "Harbor" \
             "6" "OWASP ZAP" \
-            "7" "Metasploit" \
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
-        case "$CHOICE" in
-            1)
-                conts=$(docker ps -a --format '{{.Names}}' | grep -E "gvm|openvas|greenbone" || true)
-                if [ -n "$conts" ]; then
-                    echo "$conts" | xargs -r docker restart
-                    RESTARTED=true
-                else
-                    whiptail --msgbox "Nenhum container OpenVAS encontrado." 8 60
-                fi
-                ;;
-            2)
-                conts=$(docker ps -a --format '{{.Names}}' | grep -E "mitmproxy|ngsoc_mitmproxy" || true)
-                if [ -n "$conts" ]; then
-                    echo "$conts" | xargs -r docker restart
-                    RESTARTED=true
-                else
-                    whiptail --msgbox "Nenhum container MITMProxy encontrado." 8 60
-                fi
-                ;;
-            3)
-                conts=$(docker ps -a --format '{{.Names}}' | grep -E "trivy|ngsoc_trivy" || true)
-                if [ -n "$conts" ]; then
-                    echo "$conts" | xargs -r docker restart
-                    RESTARTED=true
-                else
-                    whiptail --msgbox "Nenhum container Trivy encontrado." 8 60
-                fi
-                ;;
-            4)
-                conts=$(docker ps -a --format '{{.Names}}' | grep -E "mongo|mongodb|msf-db" || true)
-                if [ -n "$conts" ]; then
-                    echo "$conts" | xargs -r docker restart
-                    RESTARTED=true
-                else
-                    whiptail --msgbox "Nenhum container MongoDB encontrado." 8 60
-                fi
-                ;;
-            5)
-                conts=$(docker ps -a --format '{{.Names}}' | grep -E "harbor|registry|harbor-core" || true)
-                if [ -n "$conts" ]; then
-                    echo "$conts" | xargs -r docker restart
-                    RESTARTED=true
-                else
-                    whiptail --msgbox "Nenhum container Harbor encontrado." 8 60
-                fi
-                ;;
-            6)
-                conts=$(docker ps -a --format '{{.Names}}' | grep -E "zap|ngsoc_zap" || true)
-                if [ -n "$conts" ]; then
-                    echo "$conts" | xargs -r docker restart
-                    RESTARTED=true
-                else
-                    whiptail --msgbox "Nenhum container ZAP encontrado." 8 60
-                fi
-                ;;
-            7)
-                conts=$(docker ps -a --format '{{.Names}}' | grep -E "metasploit|msf|ngsoc_metasploit" || true)
-                if [ -n "$conts" ]; then
-                    echo "$conts" | xargs -r docker restart
-                    RESTARTED=true
-                else
-                    whiptail --msgbox "Nenhum container Metasploit encontrado." 8 60
-                fi
-                ;;
+        case $CHOICE in
+            1) conts=$(docker ps -a --format '{{.Names}}' --filter "name=gvm" 2>/dev/null || true)
+               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container OpenVAS encontrado." 8 60 ;;
+            2) conts=$(docker ps -a --format '{{.Names}}' --filter "name=ngsoc_mitmproxy" 2>/dev/null || true)
+               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container MITMProxy encontrado." 8 60 ;;
+            3) conts=$(docker ps -a --format '{{.Names}}' --filter "name=trivy" 2>/dev/null || true)
+               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container Trivy encontrado." 8 60 ;;
+            4) conts=$(docker ps -a --format '{{.Names}}' --filter "name=mongodb" 2>/dev/null || true)
+               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container MongoDB encontrado." 8 60 ;;
+            5) conts=$(docker ps -a --format '{{.Names}}' --filter "name=harbor" 2>/dev/null || true)
+               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container Harbor encontrado." 8 60 ;;
+            6) conts=$(docker ps -a --format '{{.Names}}' --filter "name=zap" 2>/dev/null || true)
+               [ -n "$conts" ] && docker restart $conts && RESTARTED=true || whiptail --msgbox "Nenhum container ZAP encontrado." 8 60 ;;
             0) break ;;
             *) whiptail --msgbox "Opção inválida" 8 40 ;;
         esac
     done
-
-    if [ "$RESTARTED" = true ]; then
-        whiptail --msgbox "Containers reiniciados!" 8 50
-    fi
+    [ "$RESTARTED" = true ] && whiptail --msgbox "Containers reiniciados!" 8 50
 }
 
 # ===============================
-# Portais (mantido como função; invocado agora a partir de Gestão)
+# Portais
 # ===============================
 portals_menu() {
     while true; do
@@ -337,7 +267,7 @@ portals_menu() {
             "6" "Harbor" \
             "0" "VOLTAR" 3>&1 1>&2 2>&3)
 
-        case "$CHOICE" in
+        case $CHOICE in
             1) xdg-open "http://192.168.100.23:8080" 2>/dev/null || whiptail --msgbox "URL: http://192.168.100.23:8080" 8 60 ;;
             2) xdg-open "http://192.168.100.23:9392/login" 2>/dev/null || whiptail --msgbox "URL: http://192.168.100.23:9392/login" 8 60 ;;
             3) xdg-open "http://192.168.100.23:8090/#/flows" 2>/dev/null || whiptail --msgbox "URL: http://192.168.100.23:8090/#/flows" 8 60 ;;
@@ -356,7 +286,7 @@ portals_menu() {
 directory_structure() {
     local DIR_TEXT
     DIR_TEXT=$(mktemp)
-    cat <<'EOT' > "$DIR_TEXT"
+    cat <<EOT > "$DIR_TEXT"
 /opt/ngsoc-deploy
 ├── data
 │   ├── harbor
@@ -403,20 +333,20 @@ directory_structure() {
 │   ├── install_openvas_docker.sh
 │   ├── install_trivy_docker.sh
 │   ├── install_wazuh_allinone.sh
-│   ├── install_metasploit_docker.sh
+│   ├── install_metaslploit_docker.sh
 │   ├── install_zap_docker.sh
 │   ├── menu.sh
 │   └── restart_all_containers.sh
 ├── ansible
 │   ├── playbooks
-│      ├── deploy_mitmproxy.yml
-│      ├── deploy_openvas.yml
-│      ├── deploy_trivy.yml
-│      ├── deploy_metasploit.yml
-│      ├── deploy_zap.yml
-│      ├── deploy_wazuh_allinone.yml
-│      ├── deploy_harbor.yml
-│      └── deploy_nginx.yml
+│       ├── deploy_mitmproxy.yml
+│       ├── deploy_openvas.yml
+│       ├── deploy_trivy.yml
+│       ├── deploy_metasploit.yml
+│       ├── deploy_zap.yml
+│       ├── deploy_wazuh_allinone.yml
+│       ├── deploy_harbor.yml
+│       └── deploy_nginx.yml
 └── Fim
 EOT
 
