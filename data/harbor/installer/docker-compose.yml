@@ -253,6 +253,8 @@ services:
     container_name: trivy-adapter
     image: goharbor/trivy-adapter-photon:v2.14.0
     restart: always
+    env_file:
+      - ./common/config/trivy-adapter/env/env
     cap_drop:
       - ALL
     depends_on:
@@ -261,6 +263,7 @@ services:
     networks:
       - harbor
     volumes:
+      - /opt/ngsoc-deploy/data/harbor/trivy/reports:/home/scanner/.cache/reports
       - type: bind
         source: /opt/ngsoc-deploy/data/harbor/data/trivy-adapter/trivy
         target: /home/scanner/.cache/trivy
@@ -275,8 +278,7 @@ services:
       options:
         syslog-address: "tcp://localhost:1514"
         tag: "trivy-adapter"
-    env_file:
-      ./common/config/trivy-adapter/env
+
 networks:
   harbor:
     external: false
