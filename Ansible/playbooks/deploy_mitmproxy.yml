@@ -86,6 +86,8 @@
         name: "{{ mitm_container_name }}"
         image: "{{ mitm_image }}:latest"
         restart_policy: always
+        environment:
+          MITMPROXY_WEB_PASSWORD: "{{ mitm_ui_pass }}"
         published_ports:
           - "{{ mitm_proxy_port }}:{{ mitm_proxy_port }}"
           - "{{ mitm_web_port }}:{{ mitm_web_port }}"
@@ -105,6 +107,9 @@
           - "web_password={{ mitm_ui_pass }}"
         state: started
         detach: true
+        networks:
+          - name: "ngsoc_net"
+
 
     - name: Wait until mitmproxy container is running
       ansible.builtin.shell: |
@@ -150,8 +155,7 @@
         mode: '0644'
       when: ca_wait is succeeded
 
-    - name: "Also copy CA to mitm data certs dir (for backup/config)"
-      become: yes
+    - name: "Also copy CA to mitm data certs dir (for backup/config) - robust fallback"
       ansible.builtin.shell: |
         set -e
         SRC="{{ mitm_logs_dir }}/{{ export_filename }}"
@@ -165,14 +169,19 @@
         elif [ -f "{{ mitm_certs_dir }}/{{ export_filename }}" ]; then
           echo "ALREADY_IN_CERTS"
         else
-          echo "NO_CERT_FOUND"
-          exit 0
+          # fallback: try docker cp from container (não falha se container não existir)
+          docker cp {{ mitm_container_name }}:/home/mitmproxy/.mitmproxy/{{ export_filename }} "{{ mitm_certs_dir }}/{{ export_filename }}" 2>/dev/null || true
+          if [ -f "{{ mitm_certs_dir }}/{{ export_filename }}" ]; then
+            echo "COPIED_FROM_CONTAINER"
+          else
+            echo "NO_CERT_FOUND"
+            exit 0
+          fi
         fi
-      args:
-        warn: false
       register: mitm_copy_to_certs
-      changed_when: "'COPIED_FROM_LOGS' in mitm_copy_to_certs.stdout"
+      changed_when: "'COPIED_FROM_LOGS' in (mitm_copy_to_certs.stdout | default('')) or 'COPIED_FROM_CONTAINER' in (mitm_copy_to_certs.stdout | default(''))"
       failed_when: false
+
 
     # ===============================================================
     # Documentação
