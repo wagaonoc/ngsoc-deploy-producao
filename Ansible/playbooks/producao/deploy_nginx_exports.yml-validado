@@ -1,0 +1,86 @@
+---
+- name: Deploy nginx exports container to serve mitmproxy CA (creates export dir + marker)
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  vars:
+    export_dir: "/opt/ngsoc-deploy/exports/mitmproxy"
+    export_port: 8085
+    nginx_container_name: "ngsoc_exports"
+    nginx_image: "nginx:alpine"
+    marker_file: ".created-by"
+
+  tasks:
+    - name: Ensure export directory exists (permission safe)
+      ansible.builtin.file:
+        path: "{{ export_dir }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Write creation marker for audit/tracking
+      ansible.builtin.copy:
+        dest: "{{ export_dir }}/{{ marker_file }}"
+        content: |
+          created_by: deploy_nginx_exports.yml
+          user: {{ ansible_user_id }}
+          timestamp: {{ ansible_date_time.iso8601 }}
+          host: {{ ansible_fqdn | default(ansible_hostname) }}
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Check if port {{ export_port }} is free on host
+      ansible.builtin.shell: |
+        ss -lnt | awk 'NR>1{print $4}' | grep -E "(:|\\.){{ export_port }}$" && echo "IN_USE" || echo "FREE"
+      register: port_check
+      changed_when: false
+
+    - name: Fail if export port is in use (avoid collisions)
+      ansible.builtin.fail:
+        msg: "Porta {{ export_port }} já está em uso no host. Libere a porta ou altere export_port no playbook."
+      when: port_check.stdout is defined and port_check.stdout.find("IN_USE") != -1
+
+    - name: Remove existing nginx export container if present (idempotência)
+      community.docker.docker_container:
+        name: "{{ nginx_container_name }}"
+        state: absent
+        force_kill: true
+      ignore_errors: true
+
+    - name: Pull nginx image (ensure available)
+      community.docker.docker_image:
+        name: "{{ nginx_image }}"
+        source: pull
+
+    - name: Run nginx exports container (mount host export_dir read-only)
+      community.docker.docker_container:
+        name: "{{ nginx_container_name }}"
+        image: "{{ nginx_image }}"
+        state: started
+        restart_policy: unless-stopped
+        published_ports:
+          - "{{ export_port }}:80"
+        volumes:
+          - "{{ export_dir }}:/usr/share/nginx/html:ro"
+        env:
+          NGSOC_EXPORT_DIR: "{{ export_dir }}"
+
+    - name: Short pause to allow nginx container to start
+      ansible.builtin.pause:
+        seconds: 2
+
+    - name: Display summary (nginx only creates export dir and container; certificate copy handled by mitm playbook)
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          ✅ NGINX EXPORTS INSTALLED (no certificate validation)
+          ==========================================================
+          Container : {{ nginx_container_name }}
+          Image     : {{ nginx_image }}
+          Export dir: {{ export_dir }}
+          Marker    : {{ export_dir }}/{{ marker_file }}
+          Note      : O Playbook do MITM é responsável por copiar o certificado para este diretório.
+          Access    : http://{{ ansible_default_ipv4.address }}:{{ export_port }}/<cert-file>
+          ==========================================================
