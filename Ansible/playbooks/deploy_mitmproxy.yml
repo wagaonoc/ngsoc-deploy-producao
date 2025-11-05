@@ -86,7 +86,7 @@
         name: "{{ mitm_container_name }}"
         image: "{{ mitm_image }}:latest"
         restart_policy: always
-        environment:
+        env:
           MITMPROXY_WEB_PASSWORD: "{{ mitm_ui_pass }}"
         published_ports:
           - "{{ mitm_proxy_port }}:{{ mitm_proxy_port }}"
