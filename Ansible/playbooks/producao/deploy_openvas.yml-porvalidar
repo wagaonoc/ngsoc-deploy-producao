@@ -1,0 +1,175 @@
+---
+- name: "Deploy Greenbone / OpenVAS (NGSOC) - Estrutura Padronizada e Idempotente"
+  hosts: localhost
+  connection: local
+  gather_facts: yes
+  become: yes
+
+  vars:
+    ngsoc_dir: /opt/ngsoc-deploy
+    openvas_data_dir: "{{ ngsoc_dir }}/data/openvas"
+    openvas_logs_dir: "{{ ngsoc_dir }}/logs/openvas"
+    openvas_docs_dir: "{{ ngsoc_dir }}/docs/openvas"
+    openvas_exports_dir: "{{ ngsoc_dir }}/exports/openvas"
+    openvas_reports_dir: "{{ ngsoc_dir }}/reports/openvas"
+    openvas_compose_dir: "{{ openvas_data_dir }}/greenbone"
+
+    # configurable vars (can be passed via --extra-vars)
+    gsa_host_port: "{{ gsa_host_port | default(9392) }}"
+    gsa_admin_user: "{{ gsa_admin_user | default('admin') }}"
+    gsa_admin_pass: "{{ gsa_admin_pass | default('Ng5ocAdm1n!23') }}"
+    ngsoc_network: ngsoc_net
+
+  pre_tasks:
+    - name: "Ensure Docker daemon is active"
+      ansible.builtin.systemd:
+        name: docker
+        state: started
+      become: yes
+
+    - name: "Ensure Ansible 'community.docker' collection is installed"
+      ansible.builtin.command: >
+        ansible-galaxy collection install community.docker -f
+      changed_when: false
+      check_mode: no
+
+    - name: "Ensure compose project directory exists"
+      ansible.builtin.file:
+        path: "{{ openvas_compose_dir }}"
+        state: directory
+        mode: '0755'
+
+  tasks:
+    - name: "1. Criar estrutura base de diretórios (data, logs, docs, exports, reports)"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0775'
+        owner: root
+        group: root
+      loop:
+        - "{{ openvas_data_dir }}"
+        - "{{ openvas_logs_dir }}"
+        - "{{ openvas_docs_dir }}"
+        - "{{ openvas_exports_dir }}"
+        - "{{ openvas_reports_dir }}"
+        - "{{ openvas_data_dir }}/gvmd-data"
+        - "{{ openvas_data_dir }}/psql-data"
+        - "{{ openvas_data_dir }}/redis-socket"
+        - "{{ openvas_data_dir }}/ospd-openvas-socket"
+        - "{{ openvas_data_dir }}/gvmd-socket"
+        - "{{ openvas_data_dir }}/feed-data"
+      register: created_dirs
+
+    - name: "Set permissões sensatas em diretórios OpenVAS"
+      ansible.builtin.file:
+        path: "{{ item }}"
+        mode: '0755'
+      loop:
+        - "{{ openvas_data_dir }}"
+        - "{{ openvas_logs_dir }}"
+        - "{{ openvas_docs_dir }}"
+        - "{{ openvas_exports_dir }}"
+        - "{{ openvas_reports_dir }}"
+
+    - name: "2. Garantir entrada de rsyslog para leitura dos logs OpenVAS (containers -> /var/log/openvas)"
+      ansible.builtin.lineinfile:
+        path: /etc/rsyslog.d/containers.conf
+        create: yes
+        line: 'input(type="imfile" File="{{ openvas_logs_dir }}/*.log" Tag="openvas" Severity="info" Facility="local0")'
+        insertafter: EOF
+      notify: Restart rsyslog
+
+    - name: "3. Criar README de acesso e documentação (formato executivo)"
+      ansible.builtin.copy:
+        dest: "{{ openvas_docs_dir }}/README.txt"
+        mode: '0644'
+        content: |
+          ==========================================================
+          NG-SOC - OpenVAS / Greenbone Vulnerability Management
+          ==========================================================
+
+          🌐 PORTAL WEB (GSA)
+          - URL: http://{{ ansible_default_ipv4.address }}:{{ gsa_host_port }}
+          - Usuário: {{ gsa_admin_user }}
+          - Senha: {{ gsa_admin_pass }}
+
+          🐳 DOCKER-COMPOSE (onde está o compose)
+          - docker-compose file: {{ openvas_compose_dir }}/docker-compose.yml
+          - Para operações:
+            cd {{ openvas_compose_dir }} && docker compose ps
+            cd {{ openvas_compose_dir }} && docker compose up -d
+            cd {{ openvas_compose_dir }} && docker compose down
+
+          🐳 CONTAINERS PRINCIPAIS (resumo)
+          - pg-gvm ........ Banco PostgreSQL (dados persistidos em: {{ openvas_data_dir }}/psql-data)
+          - redis-server .. Cache de sessão (socket em: {{ openvas_data_dir }}/redis-socket)
+          - ospd-openvas .. Scanner (logs montados via: {{ openvas_logs_dir }})
+          - gvmd .......... Manager (dados: {{ openvas_data_dir }}/gvmd-data)
+          - gsa ........... Interface Web (porta: {{ gsa_host_port }})
+
+          📁 DIRETÓRIOS (ponto de backup/recover)
+          - Dados persistentes: {{ openvas_data_dir }}
+          - Logs: {{ openvas_logs_dir }}
+          - Reports: {{ openvas_reports_dir }}
+          - Exports (CA / downloads): {{ openvas_exports_dir }}
+          - Docs: {{ openvas_docs_dir }}
+
+          ⚙️ TROUBLESHOOTING - check rápido
+          - Ver containers: docker ps | grep greenbone
+          - Ver logs (host): sudo tail -f {{ openvas_logs_dir }}/gvmd.log
+          - Parar: cd {{ openvas_compose_dir }} && docker compose down
+          - Reiniciar: cd {{ openvas_compose_dir }} && docker compose up -d
+          - Checar rede docker: docker network ls | grep {{ ngsoc_network }}
+
+          ⚠️ NOTAS CRÍTICAS DE IMPLANTAÇÃO:
+          1. Logs container -> são espelhados em {{ openvas_logs_dir }} via bind mounts no docker-compose.
+          2. A primeira sincronização de feeds (VT, SCAP) pode demorar até 30 minutos; deixe os containers rodando.
+          3. Faça backup periódico do diretório '{{ openvas_data_dir }}/psql-data' (Postgres) e '{{ openvas_data_dir }}/gvmd-data'.
+
+    - name: "4. Subir containers OpenVAS via Docker Compose (idempotente)"
+      community.docker.docker_compose:
+        project_src: "{{ openvas_compose_dir }}"
+        state: present
+        pull: yes
+
+    - name: "5. Esperar GSA subir (porta dinâmica)"
+      ansible.builtin.wait_for:
+        host: "{{ ansible_default_ipv4.address }}"
+        port: "{{ gsa_host_port }}"
+        timeout: 300
+        state: started
+
+    - name: "6. Criar credenciais (arquivo protegido)"
+      ansible.builtin.copy:
+        dest: "{{ openvas_docs_dir }}/credentials.txt"
+        mode: '0600'
+        owner: root
+        group: root
+        content: |
+          ==========================================================
+          NG-SOC - OpenVAS Credentials
+          ==========================================================
+          URL: http://{{ ansible_default_ipv4.address }}:{{ gsa_host_port }}
+          User: {{ gsa_admin_user }}
+          Pass: {{ gsa_admin_pass }}
+          ==========================================================
+
+    - name: "7. Resumo final (debug)"
+      ansible.builtin.debug:
+        msg: |
+          ==========================================================
+          ✅ OPENVAS DEPLOY SUMMARY
+          ==========================================================
+          GSA URL : http://{{ ansible_default_ipv4.address }}:{{ gsa_host_port }}
+          Compose : {{ openvas_compose_dir }}/docker-compose.yml
+          Docs    : {{ openvas_docs_dir }}/README.txt
+          Logs    : {{ openvas_logs_dir }}
+          Data    : {{ openvas_data_dir }}
+          ==========================================================
+
+  handlers:
+    - name: Restart rsyslog
+      ansible.builtin.service:
+        name: rsyslog
+        state: restarted
