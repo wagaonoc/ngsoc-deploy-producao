@@ -1,33 +1,43 @@
-==========================================================
-NG-SOC - MITMProxy Usage & Access (ngsoc_mitmproxy)
-==========================================================
+NGSOC MITMPROXY - README
+========================
 
-🌐 ACESSO AO UI (Mitmweb):
-* URL: http://192.168.100.23:8090/#/flows
+Image (local)  : myrepo/ngsoc-mitmproxy:custom-12.1.2
+Image (prod)   : ngsoc-mitmproxy:prod
+Registry target: (none)
 
-🔧 ACESSO AO PROXY:
-* Host: 192.168.100.23
-* Porta: 8089
+Runtime notes:
+- Default web UI: port 8090 (mitmweb)
+- Proxy port: 8089
+- Default web password: 'zap' (change in production)
+- Recommended host directories to mount:
+  /opt/ngsoc-deploy/logs/mitmproxy  -> container: /opt/ngsoc-deploy/logs/mitmproxy
+  /opt/ngsoc-deploy/exports/mitmproxy -> container: /opt/ngsoc-deploy/exports/mitmproxy
+  /opt/ngsoc-deploy/data/mitmproxy -> container: /opt/ngsoc-deploy/data/mitmproxy
 
-📁 DIRETÓRIOS PERSISTENTES:
-* Data:    /opt/ngsoc-deploy/data/mitmproxy
-* Certs:   /opt/ngsoc-deploy/data/mitmproxy/certs
-* Logs:    /opt/ngsoc-deploy/logs/mitmproxy
-* Exports: /opt/ngsoc-deploy/exports/mitmproxy
-* Reports: /opt/ngsoc-deploy/reports/mitmproxy
-* Docs:    /opt/ngsoc-deploy/docs/mitmproxy
+Example docker run (recommended for rsyslog host ingestion & restart on boot):
+docker run -d --name ngsoc_mitmproxy \
+  --restart unless-stopped \
+  -p 8089:8089 -p 8090:8090 \
+  -v /opt/ngsoc-deploy/logs/mitmproxy:/opt/ngsoc-deploy/logs/mitmproxy:rw \
+  -v /opt/ngsoc-deploy/exports/mitmproxy:/opt/ngsoc-deploy/exports/mitmproxy:ro \
+  -v /opt/ngsoc-deploy/data/mitmproxy:/opt/ngsoc-deploy/data/mitmproxy:rw \
+  myrepo/ngsoc-mitmproxy:custom-12.1.2
 
-🔐 CERTIFICADO/CA:
-* Export público: /opt/ngsoc-deploy/exports/mitmproxy/mitmproxy-ca-cert.pem
-* Backup interno: /opt/ngsoc-deploy/data/mitmproxy/certs/mitmproxy-ca-cert.pem
+Suggested docker-compose snippet:
+services:
+  mitmproxy:
+    image: myrepo/ngsoc-mitmproxy:custom-12.1.2
+    container_name: ngsoc_mitmproxy
+    restart: unless-stopped
+    ports:
+      - "8089:8089"
+      - "8090:8090"
+    volumes:
+      - /opt/ngsoc-deploy/logs/mitmproxy:/opt/ngsoc-deploy/logs/mitmproxy:rw
+      - /opt/ngsoc-deploy/exports/mitmproxy:/opt/ngsoc-deploy/exports/mitmproxy:ro
+      - /opt/ngsoc-deploy/data/mitmproxy:/opt/ngsoc-deploy/data/mitmproxy:rw
 
-🧩 CONTAINER:
-* Nome: ngsoc_mitmproxy
-* Imagem: mitmproxy/mitmproxy:latest
-* Reinício automático: always
-* Volume: /opt/ngsoc-deploy/logs/mitmproxy:/home/mitmproxy/.mitmproxy
+RSYSLOG:
+- Configure rsyslog on the host to tail /opt/ngsoc-deploy/logs/mitmproxy/*.log and forward to your central syslog (e.g. 1514/tcp).
+- Example: create /etc/rsyslog.d/30-mitm.conf with a FileMonitor or imfile rules.
 
-🧰 COMANDOS ÚTEIS:
-* docker ps --filter "name=ngsoc_mitmproxy"
-* tail -f /opt/ngsoc-deploy/logs/mitmproxy/mitmproxy.log
-* docker cp ngsoc_mitmproxy:/home/mitmproxy/.mitmproxy/mitmproxy-ca-cert.pem /opt/ngsoc-deploy/exports/mitmproxy/

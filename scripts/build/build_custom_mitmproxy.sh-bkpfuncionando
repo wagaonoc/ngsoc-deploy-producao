@@ -1,0 +1,232 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# ============================================================
+# build_custom_mitmproxy.sh
+# Build a reproducible custom mitmproxy image for NGSOC
+# - Uses fixed base digest for mitmproxy
+# - Copies NGSOC directories: data, logs, exports, docs
+# - Builds image, optionally scans with trivy, exports tar.gz
+# ============================================================
+
+# ---------- Config (edite conforme necessário) ----------
+# Base image digest (immutable)
+BASE_DIGEST="mitmproxy/mitmproxy@sha256:4ff0437c5cd20babca7b1a563391fc609e66ef93bca60c98d191bdd439809afb"
+
+# Paths in the host NGSOC structure (source)
+NGSOC_BASE="/opt/ngsoc-deploy"
+SRC_DATA="${NGSOC_BASE}/data/mitmproxy"
+SRC_LOGS="${NGSOC_BASE}/logs/mitmproxy"
+SRC_EXPORTS="${NGSOC_BASE}/exports/mitmproxy"
+SRC_DOCS="${NGSOC_BASE}/docs/mitmproxy"
+
+# Export/build workspace (in user home)
+EXPORT_BASE="${HOME}/ngsoc_export"
+EXPORT_DIR="${EXPORT_BASE}/mitmproxy"
+
+# Image tag to build
+LOCAL_TAG="myrepo/ngsoc-mitmproxy:custom-12.1.2"
+
+# Optional: registry target for push (set to "" to skip push)
+REGISTRY_TARGET=""  # e.g. myharbor.local/ngsoc/mitmproxy:custom-12.1.2
+
+# Minimum free space (MB) required to attempt build (heuristic)
+MIN_FREE_MB=800
+
+# Temporary log
+BUILD_LOG="/tmp/build_custom_mitmproxy.log"
+# --------------------------------------------------------
+
+echo
+echo "=== NGSOC MITMPROXY CUSTOM IMAGE BUILD ==="
+echo "Export dir: $EXPORT_DIR"
+echo "Local image tag: $LOCAL_TAG"
+if [ -n "$REGISTRY_TARGET" ]; then
+  echo "Registry target: $REGISTRY_TARGET"
+else
+  echo "Registry target: (none) — push step will be skipped"
+fi
+echo
+
+# --------- Prechecks ----------
+if ! command -v docker >/dev/null 2>&1; then
+  echo "ERROR: docker not found in PATH. Install Docker before running." >&2
+  exit 1
+fi
+
+# check free space on EXPORT_BASE filesystem
+avail_kb=$(df --output=avail -k "$EXPORT_BASE" 2>/dev/null | tail -1 || echo 0)
+avail_mb=$((avail_kb/1024))
+if [ "$avail_mb" -lt "$MIN_FREE_MB" ]; then
+  echo "WARNING: free space on $(dirname "$EXPORT_BASE") is ${avail_mb}MB < ${MIN_FREE_MB}MB."
+  echo "Continue? (y/N)"
+  read -r yn
+  if [ "$yn" != "y" ] && [ "$yn" != "Y" ]; then
+    echo "Aborting due to insufficient disk space."
+    exit 2
+  fi
+fi
+
+# ensure export dirs exist and are clean
+rm -rf "$EXPORT_DIR"
+mkdir -p "$EXPORT_DIR"/{data,logs,exports,docs}
+echo "Created workspace: $EXPORT_DIR"
+
+# --------- Copy sources (only if exist) ----------
+copy_if_exists() {
+  local src=$1
+  local dst=$2
+  if [ -d "$src" ]; then
+    echo "Copying $src -> $dst"
+    # use rsync style copy to preserve structure but avoid special files
+    /bin/cp -aL "${src}/." "$dst/" || /bin/cp -a "${src}/." "$dst/" || true
+  else
+    echo "Notice: source not found: $src (skipping)"
+  fi
+}
+
+copy_if_exists "$SRC_DATA" "$EXPORT_DIR/data"
+copy_if_exists "$SRC_LOGS" "$EXPORT_DIR/logs"
+copy_if_exists "$SRC_EXPORTS" "$EXPORT_DIR/exports"
+copy_if_exists "$SRC_DOCS" "$EXPORT_DIR/docs"
+
+echo
+echo "Files in export workspace (summary):"
+du -sh "$EXPORT_DIR" || true
+find "$EXPORT_DIR" -maxdepth 2 -type f -printf "%p %kKB\n" | sed -n '1,200p' || true
+echo
+
+# --------- Security quick-scan for obvious secrets ----------
+echo "Quick grep for common secret keywords in exported files (no replacement done by script):"
+grep -R --line-number -iE "password|passwd|secret|token|key|private" "$EXPORT_DIR" || true
+echo "If sensitive secrets appear, remove or replace them before building the image."
+echo
+
+# --------- Sanitize exported files (remove private keys) ----------
+echo
+echo "Sanitizing exported workspace (removing private keys)..."
+find "$EXPORT_DIR" -type f -name "*.pem" -exec grep -q "BEGIN RSA PRIVATE KEY" {} \; -print -delete
+echo "After cleanup, PEM files remaining:"
+find "$EXPORT_DIR" -type f -name "*.pem" -printf "%p\n" || true
+echo
+
+# --------- Create Dockerfile (safe valid JSON array for CMD) ----------
+cat > "$EXPORT_DIR/Dockerfile" <<EOF
+FROM ${BASE_DIGEST}
+
+# Copy NGSOC structure (only mitmproxy relevant folders)
+COPY data/ /opt/ngsoc-deploy/data/mitmproxy/
+COPY logs/ /opt/ngsoc-deploy/logs/mitmproxy/
+COPY exports/ /opt/ngsoc-deploy/exports/mitmproxy/
+COPY docs/ /opt/ngsoc-deploy/docs/mitmproxy/
+
+# Ensure runtime directories and link .mitmproxy path
+RUN mkdir -p /opt/ngsoc-deploy/reports/mitmproxy \
+ && chown -R root:root /opt/ngsoc-deploy \
+ && chmod -R 755 /opt/ngsoc-deploy \
+ && ln -sf /opt/ngsoc-deploy/logs/mitmproxy /home/mitmproxy/.mitmproxy || true
+
+ENV MITMPROXY_WEB_PASSWORD=zap \
+    NGSOC_HOME=/opt/ngsoc-deploy \
+    MITMPROXY_DATA_DIR=/opt/ngsoc-deploy/data/mitmproxy \
+    MITMPROXY_EXPORT_DIR=/opt/ngsoc-deploy/exports/mitmproxy
+
+EXPOSE 8089 8090
+
+ENTRYPOINT ["mitmweb"]
+CMD ["--listen-host","0.0.0.0","--listen-port","8089","--web-host","0.0.0.0","--web-port","8090","--set","web_password=zap"]
+EOF
+
+echo "Dockerfile written to $EXPORT_DIR/Dockerfile"
+echo
+
+# --------- Build image ----------
+echo "Starting docker build..."
+cd "$EXPORT_DIR"
+# reuse cache if present; capture output
+if docker build -t "$LOCAL_TAG" . 2>&1 | tee "$BUILD_LOG"; then
+  echo "Docker build completed: $LOCAL_TAG"
+else
+  echo "ERROR: docker build failed. See $BUILD_LOG for details." >&2
+  tail -n 60 "$BUILD_LOG" || true
+  exit 11
+fi
+
+# --------- Optional: quick file check inside built image ----------
+echo "Inspecting built image file presence (quick check)..."
+docker run --rm --entrypoint sh "$LOCAL_TAG" -c "ls -la /opt/ngsoc-deploy || true"
+docker run --rm --entrypoint sh "$LOCAL_TAG" -c "ls -la /opt/ngsoc-deploy/logs/mitmproxy || true"
+
+# --------- Optional Trivy scan ----------
+if command -v trivy >/dev/null 2>&1; then
+  echo
+  echo "Running Trivy scan (HIGH+CRITICAL)..."
+  trivy image --severity HIGH,CRITICAL "$LOCAL_TAG" || echo "Trivy returned non-zero (inspect output above)."
+else
+  echo "Trivy not installed; skipping image security scan. Recommend installing trivy to scan images."
+fi
+
+# --------- Export image to tar.gz for offline distribution ----------
+OUT_TAR="${EXPORT_DIR}/mitmproxy_custom_12.1.2.tar"
+echo
+echo "Saving image to tar: $OUT_TAR (this may take time depending on size)..."
+docker save "$LOCAL_TAG" -o "$OUT_TAR"
+gzip -f "$OUT_TAR"
+echo "Saved and gzipped: ${OUT_TAR}.gz"
+ls -lh "${OUT_TAR}.gz" || true
+
+# --------- Optional: push to registry if REGISTRY_TARGET is set ----------
+if [ -n "$REGISTRY_TARGET" ]; then
+  echo
+  echo "Tagging for registry: $REGISTRY_TARGET"
+  docker tag "$LOCAL_TAG" "$REGISTRY_TARGET"
+  echo "About to push to $REGISTRY_TARGET. Make sure you are logged in (docker login). Continue? (y/N)"
+  read -r yn
+  if [ "$yn" = "y" ] || [ "$yn" = "Y" ]; then
+    docker push "$REGISTRY_TARGET"
+    echo "Push finished (if no errors)."
+  else
+    echo "Skipping push."
+  fi
+fi
+
+# --------- Finish and instructions ----------
+echo
+echo "=== BUILD COMPLETE ==="
+echo "Local image: $LOCAL_TAG"
+if [ -n "$REGISTRY_TARGET" ]; then
+  echo "Registry image (if pushed): $REGISTRY_TARGET"
+fi
+echo "Offline bundle: ${OUT_TAR}.gz"
+echo
+cat <<EOF
+Next recommended steps:
+
+1) Manually review exported workspace and remove any sensitive files:
+   ls -la $EXPORT_DIR
+   # If secrets found, edit/remove them before sharing.
+
+2) Test run locally:
+   docker run --rm -d --name test_mitm -p 8089:8089 -p 8090:8090 $LOCAL_TAG
+   docker logs --tail 80 test_mitm
+   # open http://<host-ip>:8090 (password: zap)
+   docker rm -f test_mitm
+
+3) To load the offline bundle on a client (offline env):
+   gunzip -c mitmproxy_custom_12.1.2.tar.gz | docker load
+   docker run -d --name ngsoc_mitmproxy -p 8089:8089 -p 8090:8090 myrepo/ngsoc-mitmproxy:custom-12.1.2
+
+4) To push to your registry (online):
+   docker tag $LOCAL_TAG myharbor.example.com/ngsoc/mitmproxy:custom-12.1.2
+   docker login myharbor.example.com
+   docker push myharbor.example.com/ngsoc/mitmproxy:custom-12.1.2
+
+5) Provide client docker-compose.yml pointing to your registry image:
+   services:
+     mitmproxy:
+       image: myharbor.example.com/ngsoc/mitmproxy:custom-12.1.2
+       ports: ["8089:8089","8090:8090"]
+       volumes: ["mitm_certs:/home/mitmproxy/.mitmproxy"]
+EOF
+
+exit 0
